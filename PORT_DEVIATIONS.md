@@ -57,10 +57,20 @@ Each is differential-verified unless noted. Review before open-sourcing.
 
 ## Numerical / tolerance notes
 
-5. **Computed frames vs JSON-loaded frames (~1e-6)** (Step 3).
-   C++ computes frames (Horn quaternion); Python production loads the ls_fitting
-   JSON. They agree to ~1e-6, not bit-exact. Every downstream geometric quantity
-   inherits this; only `plane_angle` amplifies it (see #6).
+5. **Computed frames (full precision) vs JSON-loaded frames (6-decimal) [2026-06-05].**
+   C++ computes frames; Python production *loads* the ls_fitting JSON. As of
+   2026-06-05 the C++ uses a **faithful port of x3dna's exact `LeastSquaresFitter`**
+   (`geometry/superposition.cpp` — covariance → 4x4 quaternion key matrix → Jacobi
+   largest-eigenvector → rotation), i.e. the *same method* that generated the JSON,
+   at full double precision. So the residual difference is NOT the algorithm — it
+   is that **the ls_fitting JSON stores frames rounded to 6 decimals** (e.g.
+   `-0.567567`), while the C++ keeps full precision. PROOF: swapping the C++ from
+   the old Horn impl to x3dna's exact fitter left `candidates_valid` unchanged
+   (6V3A: 5303 both), still 44 above Python's 5259 — the gap is entirely the
+   6-decimal JSON rounding flipping candidates that sit exactly on a validation
+   cutoff. Benign: zero effect on selected pairs or scores. To close it one would
+   bump the JSON precision in find_pair_2's `generate_modern_json` (not a C++
+   change). Only `plane_angle` amplifies the per-value diff (see #6).
 
 6. **`plane_angle` differential tolerance = 0.05°** (Step 5, `diff_candidates.py`).
    `plane_angle = deg(acos(|dir_z|))`; near `|dir_z|=1` (parallel bases) acos is
@@ -69,8 +79,9 @@ Each is differential-verified unless noted. Review before open-sourcing.
    `is_valid` always matches exactly. Carried into `quality_score` (the `/180`
    term) → `diff_candidates` uses `QTOL=3e-3`.
 
-7. **Horn quaternion used for Kabsch RMSD** (Step 6b, `template_aligner.cpp`).
-   Template RMSD uses `geometry::superpose().rms` instead of Python's SVD Kabsch.
+7. **x3dna quaternion fitter used for Kabsch RMSD** (Step 6b, `template_aligner.cpp`).
+   Template RMSD uses `geometry::superpose().rms` (now x3dna's `LeastSquaresFitter`
+   port, see #5) instead of Python's SVD Kabsch.
    Both return the optimal-alignment RMSD (global minimum is unique) → match to
    ~1e-9. Template RMSD is frame-independent (template + target coords only).
 

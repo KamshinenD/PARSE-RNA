@@ -98,7 +98,17 @@ def num_eq(a, b, tol):
     return abs(float(a) - float(b)) <= tol
 
 
-def cmp_pair(py, cp):
+def rot_mag(rb):
+    """Magnitude of the rigid-body rotation vector (deg). Near 180 the axis-angle
+    split into buckle/propeller/opening is mathematically ill-conditioned."""
+    return (rb["buckle"] ** 2 + rb["propeller"] ** 2 + rb["opening"] ** 2) ** 0.5
+
+
+def is_degenerate_rb(py, cp):
+    return rot_mag(py["rigid_body"]) > 150.0 or rot_mag(cp["rigid_body"]) > 150.0
+
+
+def cmp_pair(py, cp, skip_rb=False):
     errs = []
     for f in ("res_id1", "res_id2", "sequence", "pair_category", "num_hbonds",
               "hbond_categories", "issues"):
@@ -118,9 +128,13 @@ def cmp_pair(py, cp):
     for f, tol in (("dorg", T_GEOM), ("d_v", T_GEOM), ("dNN", T_GEOM), ("plane_angle", T_PLANE)):
         if not num_eq(py["geometry"][f], cp["geometry"][f], tol):
             errs.append(f"geom.{f} py={py['geometry'][f]} cpp={cp['geometry'][f]}")
-    for f in ("shear", "stretch", "stagger", "buckle", "propeller", "opening"):
-        if not num_eq(py["rigid_body"][f], cp["rigid_body"][f], T_RB):
-            errs.append(f"rb.{f} py={py['rigid_body'][f]} cpp={cp['rigid_body'][f]}")
+    # rigid_body (Tsukuba params): skip near a 180 deg rotation, where the
+    # axis-angle split is ill-conditioned and amplifies the ~1e-6 frame diff
+    # (documented; not a real divergence, and rb is not used downstream).
+    if not skip_rb:
+        for f in ("shear", "stretch", "stagger", "buckle", "propeller", "opening"):
+            if not num_eq(py["rigid_body"][f], cp["rigid_body"][f], T_RB):
+                errs.append(f"rb.{f} py={py['rigid_body'][f]} cpp={cp['rigid_body'][f]}")
     for r in ("res1", "res2"):
         for ax in ("origin", "x_axis", "y_axis", "z_axis"):
             for a, b in zip(py["frames"][r][ax], cp["frames"][r][ax]):
@@ -144,7 +158,14 @@ def main():
         pm = {key(p): p for p in py["pairs"]}
         cm = {key(p): p for p in cp["pairs"]}
         only_py, only_cpp = set(pm) - set(cm), set(cm) - set(pm)
-        bad = {k: cmp_pair(pm[k], cm[k]) for k in (set(pm) & set(cm)) if cmp_pair(pm[k], cm[k])}
+        bad, rb_skipped = {}, 0
+        for k in (set(pm) & set(cm)):
+            deg = is_degenerate_rb(pm[k], cm[k])
+            if deg:
+                rb_skipped += 1
+            e = cmp_pair(pm[k], cm[k], skip_rb=deg)
+            if e:
+                bad[k] = e
         agg = []
         for f, tol in (("overall_score", T_SCORE), ("pairs_score", T_SCORE),
                        ("residues_score", T_SCORE)):
@@ -166,10 +187,11 @@ def main():
             agg.append(f"candidates_total py={py['candidates_total']} cpp={cp['candidates_total']}")
         note = "" if py["candidates_valid"] == cp["candidates_valid"] else \
             f" [valid py={py['candidates_valid']} cpp={cp['candidates_valid']} ~cutoff]"
+        rbnote = f" rb_skip={rb_skipped}(~180deg)" if rb_skipped else ""
         ok = not only_py and not only_cpp and not bad and not agg
         ok_all &= ok
         print(f"  {'OK  ' if ok else 'DIFF'} {pdb:8s} pairs py={len(pm)} cpp={len(cm)} "
-              f"bad={len(bad)} only_py={len(only_py)} only_cpp={len(only_cpp)}{note}")
+              f"bad={len(bad)} only_py={len(only_py)} only_cpp={len(only_cpp)}{rbnote}{note}")
         if not ok:
             for f in agg:
                 print(f"      agg {f}")

@@ -94,9 +94,16 @@ if(Python3_FOUND AND EXISTS "${_fp2_pdb}")
                 $<TARGET_FILE:pairfinder> 1EHZ 100D 8GXB 6DN1 8CAZ 1ASY)
         # Step 9: full `find` JSON (pairs + classification + geometry + rigid_body
         # + frames + scores + issues + score_details) vs the find_pairs.py CLI.
+        # The broad set: DNA, tRNA (modified bases), group-I intron, ambiguous /
+        # O2-correction / negative-seq / insertion-code hard cases, mid-size RNAs,
+        # and three rRNA-rich ribosomes (~1300 pairs each). ~60s under the venv.
         add_test(NAME diff_json
             COMMAND ${_scipy_py}
                 ${CMAKE_CURRENT_SOURCE_DIR}/differential/diff_json.py
-                $<TARGET_FILE:pairfinder> 1EHZ 100D 8GXB 6DN1 8CAZ 1ASY 2VNU 1HMH 299D)
+                $<TARGET_FILE:pairfinder>
+                100D 1EHZ 8GXB 6DN1 8CAZ 1ASY 2VNU 1HMH 299D 1GID
+                3SUY 7T3K 4MEH 6VMY 9BZ1 7V9X 7C7A
+                8VRL 6DZP 7AQD)
+        set_tests_properties(diff_json PROPERTIES TIMEOUT 600)
     endif()
 endif()
