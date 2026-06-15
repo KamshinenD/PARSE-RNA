@@ -19,3 +19,10 @@ cmake-build-*/
 *~
 .idea/
 .vscode/
+
+# ---- Caches (clangd index, Python bytecode, generic tool caches) ------------
+.cache/
+**/.cache/
+__pycache__/
+*.pyc
+*.pyo

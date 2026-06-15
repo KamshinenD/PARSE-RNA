@@ -2,10 +2,6 @@
  * @file residue.cpp
  * @brief Residue methods + base-type helpers.
  *
- * NOTE (faithful port): the modified-base -> parent map is data-driven in the
- * Python implementation (built from data/ligand_hbond_db.json). The skeleton
- * ships standard + DNA-prefix + a few common modified codes; the full map is
- * loaded from the ligand DB in a later port step. Marked TODO below.
  */
 #include <pairfinder/core/residue.hpp>
 

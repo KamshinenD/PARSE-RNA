@@ -46,6 +46,20 @@ namespace {
 namespace resources = pairfinder::resources;
 constexpr const char* kVersion = "0.1.0";
 
+// Maps raw parameter keys to human-readable report group names.
+// Mirrors Python REPORT_GROUPS in pair_finder.scoring.issues.
+const std::unordered_map<std::string, std::string> kReportGroup = {
+    {"shear",                 "Pair In-Plane Displacement"},
+    {"stretch",               "Pair In-Plane Displacement"},
+    {"stagger",               "Pair Non-Coplanarity"},
+    {"buckle",                "Pair Non-Coplanarity"},
+    {"propeller",             "Propeller Twist"},
+    {"opening",               "Pair Opening"},
+    {"distance",              "H-Bond Distance"},
+    {"hbond_angles",          "H-Bond Angles"},
+    {"incorrect_hbond_count", "Incorrect H-Bond Count"},
+};
+
 // Resource paths default to the bundled resources/ dir (resolved exe-relative);
 // each is overridable by its env var for advanced/relocated setups.
 std::string env_or(const char* var, const std::filesystem::path& fallback) {
@@ -101,8 +115,22 @@ std::string richardson_suites() {
     return env_or("PAIRFINDER_RICHARDSON_SUITES", resources::file("richardson_suites.json"));
 }
 
-// Full pipeline + empirical pair scoring. Emits per scorable selected pair:
-// "<res_a>\t<res_b>\t<score>\t<penalty>" sorted.
+// Format the triggered issues of a PairScore as "issue:weight,..." for human-readable output.
+std::string format_issues(const pairfinder::scoring::PairScore& ps) {
+    if (ps.issues.empty()) return "";
+    std::string out;
+    for (const auto& ip : ps.issues) {
+        if (!out.empty()) out += ',';
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s:%.4f", ip.issue.c_str(), ip.weight);
+        out += buf;
+    }
+    return out;
+}
+
+// Full pipeline + empirical pair scoring (Cerny method). Emits per scorable selected pair:
+// "<res_a>\t<res_b>\t<lw_class>\t<score>\t<penalty>\t<issues>" sorted.
+// issues = comma-separated "param:weighted_penalty" in descending penalty order.
 int dump_scores(const std::string& path) {
     using namespace pairfinder;
     auto structure = io::parse_pdb(path);
@@ -142,9 +170,14 @@ int dump_scores(const std::string& path) {
         const std::string ki = sc.res_id1 < sc.res_id2 ? sc.res_id1 : sc.res_id2;
         const std::string kj = sc.res_id1 < sc.res_id2 ? sc.res_id2 : sc.res_id1;
         char buf[256];
-        std::snprintf(buf, sizeof(buf), "%s\t%s\t%.2f\t%.4f", ki.c_str(), kj.c_str(),
+        std::snprintf(buf, sizeof(buf), "%s\t%s\t%s\t%.2f\t%.4f",
+                      ki.c_str(), kj.c_str(),
+                      ps.lw_class.empty() ? "None" : ps.lw_class.c_str(),
                       ps.score, ps.penalty);
-        rows.emplace_back(buf);
+        std::string row = buf;
+        const std::string iss = format_issues(ps);
+        if (!iss.empty()) { row += '\t'; row += iss; }
+        rows.emplace_back(std::move(row));
     }
     std::sort(rows.begin(), rows.end());
     for (const auto& r : rows) std::cout << r << '\n';
@@ -182,8 +215,11 @@ int dump_torsions(const std::string& path) {
     return 0;
 }
 
-// Whole-structure score: "OVERALL\t<overall>\t<pairs>\t<residues>" then
-// per-residue "RES\t<res_id>\t<score>" sorted.
+// Whole-structure score (Cerny method).
+// Emits:
+//   "OVERALL\t<overall>\t<pairs_score>\t<residues_score>"
+//   "PAIR\t<res_a>\t<res_b>\t<lw_class>\t<score>\t<penalty>\t<issues>"  (sorted)
+//   "RES\t<res_id>\t<score>"                                             (sorted)
 int dump_structure(const std::string& path) {
     using namespace pairfinder;
     auto structure = io::parse_pdb(path);
@@ -211,7 +247,21 @@ int dump_structure(const std::string& path) {
     const auto ss = scorer.score_structure(selected, structure, finder, chem, typing);
 
     std::printf("OVERALL\t%.2f\t%.2f\t%.2f\n", ss.overall, ss.pairs_score, ss.residues_score);
+
     std::vector<std::string> rows;
+    for (const auto& ps : ss.pair_scores) {
+        const std::string ki = ps.res_id1 < ps.res_id2 ? ps.res_id1 : ps.res_id2;
+        const std::string kj = ps.res_id1 < ps.res_id2 ? ps.res_id2 : ps.res_id1;
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "PAIR\t%s\t%s\t%s\t%.2f\t%.4f",
+                      ki.c_str(), kj.c_str(),
+                      ps.lw_class.empty() ? "None" : ps.lw_class.c_str(),
+                      ps.score, ps.penalty);
+        std::string row = buf;
+        const std::string iss = format_issues(ps);
+        if (!iss.empty()) { row += '\t'; row += iss; }
+        rows.emplace_back(std::move(row));
+    }
     for (const auto& rs : ss.residue_scores) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "RES\t%s\t%.2f", rs.res_id.c_str(), rs.score);
@@ -664,7 +714,12 @@ int find_json(const std::string& path, bool score, bool details, const std::stri
             const auto it = score_by_key.find(sc.res_id1 + '\x01' + sc.res_id2);
             if (it != score_by_key.end()) {
                 p["score"] = round_to(it->second->score, 2);
-                p["issues"] = it->second->issues;
+                // Issues as a list of key strings — mirrors Python's
+                // [ip.issue for ip in ps.issues] in finder.py.
+                json iss = json::array();
+                for (const auto& ip : it->second->issues)
+                    iss.push_back(ip.issue);
+                p["issues"] = std::move(iss);
             } else {
                 p["score"] = nullptr;
                 p["issues"] = json::array();
@@ -679,10 +734,15 @@ int find_json(const std::string& path, bool score, bool details, const std::stri
         out["pairs_score"] = round_to(ss.pairs_score, 2);
         out["residues_score"] = round_to(ss.residues_score, 2);
         if (details) {
+            // Group by human-readable category names — mirrors Python issue_summary().
             json summary = json::object();
-            for (const auto& ps : ss.pair_scores)
-                for (const auto& k : ps.issues)
-                    summary[k] = summary.value(k, 0) + 1;
+            for (const auto& ps : ss.pair_scores) {
+                for (const auto& ip : ps.issues) {
+                    const auto git = kReportGroup.find(ip.issue);
+                    const std::string& grp = (git != kReportGroup.end()) ? git->second : ip.issue;
+                    summary[grp] = summary.value(grp, 0) + 1;
+                }
+            }
             out["score_details"] = json{
                 {"pairs_score", round_to(ss.pairs_score, 2)},
                 {"residues_score", round_to(ss.residues_score, 2)},

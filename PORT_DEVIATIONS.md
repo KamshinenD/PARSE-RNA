@@ -13,8 +13,32 @@ Each is differential-verified unless noted. Review before open-sourcing.
    also uses brute-force O(n²)** (squared-distance early-out) — so this matches the
    reference, not just the Python. PROFILED on the 80S ribosome (8ife.cif, 17K
    residues): `score_candidates` (find+classify) is only **0.20s** — the O(n²)
-   candidate finder is NOT the bottleneck. So this stays brute-force; no spatial
-   index needed here. (The real bottleneck was `rna_chains`; see below.)
+   candidate finder is NOT the bottleneck on the ribosome. (The real bottleneck
+   was `rna_chains`; see below.)
+
+   1a. **`find_candidates` spatial grid [2026-06-07, FIXED].** After the
+   `rna_chains` and `selection` fixes, the O(n²) origin scan became the largest
+   remaining algorithmic stage on dense single-chain RNAs (1VY4: find_candidates
+   ~0.17s, screening ~28M pairs down to 94.6K within 15Å). Replaced the all-pairs
+   scan with the same uniform spatial hash used in `rna_chains` (cell =
+   max_distance; for each `i`, query the 27 neighbor cells for `j>i`, sort the
+   neighbor list ascending, emit in `(i asc, j asc)` order). Two subtleties to
+   stay byte-identical: (a) keep `norm()` (not squared distance) at the radius
+   compare — squared rounds differently exactly at 15.0Å and let in ~59 boundary
+   candidates on 1VY4; (b) use a **collision-free packed cell key** (offset each
+   axis into `[0,2^21)`, pack into 63 bits), NOT an XOR hash — an XOR hash aliases
+   two of the 27 query cells into one bucket and double-counts neighbors. Result:
+   **1VY4 1.00s → 0.91s** (find_candidates ~0.17s → ~0.09s); 8ife unchanged
+   (protein-dominated, few framed RNA residues). Candidate list byte-identical →
+   all 12 differential tests (incl. 20-structure diff_json) still exact.
+
+   1c. **`selection` O(n²)→O(n) [2026-06-07, FIXED].** `detect_segments` and the
+   helix-extension phase compared every selected/candidate pair against every
+   other via `pairs_consecutive` (O(P²) on the pair set). Replaced both with a
+   residue-pair index (`by_pair` keyed by the ordered res_id couple) and direct
+   neighbor lookups (`{next(a1),prev(a2)}` / `{prev(a1),next(a2)}`).
+   `pairs_consecutive` kept as the reference spec. **1VY4 selection 0.45s →
+   0.03s**; results byte-identical (diff_json exact, incl. ribosome pairs).
 
    1b. **`rna_chains` spatial grid [2026-06-03, FIXED].** `RNAChains::from_structure`
    built backbone chains by scanning ALL residues to find each O3'↔P neighbor,

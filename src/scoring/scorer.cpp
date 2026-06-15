@@ -1,6 +1,13 @@
 /**
  * @file scorer.cpp
  * @brief Empirical pair scorer (port of scorer.py + issues.py + features.py + canonical.py).
+ *
+ * Severity uses the Cerny method (Cerny et al. NAR 2026 gkaf1335):
+ *   severity = 0              if ProSco >= 5  (Preferred tier)
+ *   severity = min(1, |Z'|/5) if ProSco <  5
+ * Z' is an asymmetric non-parametric standard score loaded from z_tables.json.
+ * The 9 individual parameters are scored independently (shear, stretch, stagger,
+ * buckle, propeller, opening, distance, hbond_angles, incorrect_hbond_count).
  */
 #include <pairfinder/scoring/scorer.hpp>
 
@@ -29,8 +36,9 @@ namespace {
 using json = nlohmann::json;
 using geometry::Vector3d;
 
-constexpr double kProscoPreferred = 25.0;
-constexpr double kProscoOfConcern = 5.0;
+// Cerny severity thresholds.
+constexpr double kProscoPreferred  = 5.0;   // ProSco >= 5 -> Preferred, severity = 0
+constexpr double kZprimeThreshold  = 5.0;   // |Z'| = 5 -> severity = 1
 constexpr double kPi = 3.14159265358979323846;
 
 const std::unordered_set<std::string> kBaseAtoms = {
@@ -38,9 +46,17 @@ const std::unordered_set<std::string> kBaseAtoms = {
 const std::unordered_set<std::string> kSelfReciprocal = {
     "cWW", "tWW", "cHH", "tHH", "cSS", "tSS"};
 const std::unordered_set<std::string> kSignFlip = {"shear", "stagger", "buckle"};
-const std::array<const char*, 6> kIssueKeys = {
-    "misaligned", "non_coplanar", "rotational_distortion",
-    "bad_hbond_distance", "bad_hbond_angles", "incorrect_hbond_count"};
+
+// H-bond distance policy (hbond_distance_policy.py). Watson-Crick cells judge
+// every base-base bond; all other cells judge only the strongest (primary) bond.
+const std::unordered_set<std::string> kWcDistanceCells = {"C-G/cWW", "A-U/cWW"};
+constexpr double kMinPhysicalDistance = 2.2;  // below this: not a real H-bond
+constexpr double kMaxStrongDistance   = 3.5;  // strong (primary) bond cutoff
+
+// 9 individual parameters — mirrors Python ISSUE_KEYS.
+const std::array<const char*, 9> kIssueKeys = {
+    "shear", "stretch", "stagger", "buckle", "propeller", "opening",
+    "distance", "hbond_angles", "incorrect_hbond_count"};
 
 std::string upper(std::string s) {
     for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -63,11 +79,40 @@ double maybe_flip(double v, const std::string& source, const std::string& param,
     return v;
 }
 
-double severity_from_prosco(std::optional<double> p) {
-    if (!p) return 0.0;
-    if (*p >= kProscoPreferred) return 0.0;
-    if (*p <= kProscoOfConcern) return 1.0;
-    return (kProscoPreferred - *p) / (kProscoPreferred - kProscoOfConcern);
+// True if (canonical bp_type, lw_class) is a Watson-Crick distance cell.
+bool is_wc_distance_cell(const std::string& bp, const std::string& lw) {
+    const auto [canon_bp, swapped] = canonicalize_bp(bp, lw);
+    (void)swapped;
+    return kWcDistanceCells.count(canon_bp + "/" + lw) > 0;
+}
+
+// distances_to_score (hbond_distance_policy.py): the base-base distance(s)
+// whose severity should be taken (max downstream). WC cells return every
+// physical bond; other cells return only the single strongest bond within
+// [kMinPhysicalDistance, kMaxStrongDistance], or empty when none qualifies.
+std::vector<double> distances_to_score(const std::vector<double>& distances,
+                                       const std::string& bp, const std::string& lw) {
+    std::vector<double> phys;
+    for (const double d : distances)
+        if (d >= kMinPhysicalDistance) phys.push_back(d);
+    if (phys.empty()) return {};
+    if (is_wc_distance_cell(bp, lw)) return phys;
+    std::vector<double> strong;
+    for (const double d : phys)
+        if (d <= kMaxStrongDistance) strong.push_back(d);
+    if (strong.empty()) return {};
+    return {*std::min_element(strong.begin(), strong.end())};
+}
+
+/// Cerny severity: 0 if ProSco >= 5 (Preferred); else min(1, |Z'|/5).
+/// None ProSco -> 0 (no penalty when cell unavailable).
+/// None Z' with ProSco < 5 -> 1 (maximum severity: outside distribution, no Z' data).
+double severity_from_prosco_zprime(std::optional<double> prosco,
+                                   std::optional<double> zprime) {
+    if (!prosco) return 0.0;
+    if (*prosco >= kProscoPreferred) return 0.0;
+    if (!zprime) return 1.0;
+    return std::min(1.0, std::abs(*zprime) / kZprimeThreshold);
 }
 
 // ---- H-bond angle geometry (hbond_angles.py) ----
@@ -105,12 +150,14 @@ struct HBF {
 }  // namespace
 
 struct Scorer::Impl {
-    json prosco;        // prosco_distributions
-    json categorical;   // categorical_distributions
+    json prosco;       // prosco_distributions
+    json z_tables;     // z_tables (pairs + hbonds, from z_tables.json)
+    json categorical;  // categorical_distributions
     std::unordered_map<std::string, double> pair_weights;
     double w_pairs = 0.5, w_residues = 0.5;
     std::unique_ptr<RichardsonClassifier> richardson;
 
+    /// ProSco bin lookup with bp/lw -> _ANY/lw -> _ANY/_ANY fallback.
     std::optional<double> prosco_lookup(std::optional<double> value, const std::string& source,
                                         const std::string& param, const std::string& bp,
                                         const std::string& lw) const {
@@ -131,6 +178,30 @@ struct Scorer::Impl {
             int idx = static_cast<int>((v - lo) / (hi - lo) * n_bins);
             idx = std::max(0, std::min(n_bins - 1, idx));
             return (*it)["prosco_per_bin"][idx].get<double>();
+        }
+        return std::nullopt;
+    }
+
+    /// Z' asymmetric standard score with bp/lw -> _ANY/lw -> _ANY/_ANY fallback.
+    /// Z' = (value - M) / sigma, where sigma = sl (lower half) or su (upper half).
+    std::optional<double> zprime_lookup(std::optional<double> value, const std::string& source,
+                                        const std::string& param, const std::string& bp,
+                                        const std::string& lw) const {
+        if (!value || std::isnan(*value)) return std::nullopt;
+        auto [canon_bp, swapped] = canonicalize_bp(bp, lw);
+        const double v = maybe_flip(*value, source, param, swapped);
+        const auto src = z_tables.find(source);
+        if (src == z_tables.end()) return std::nullopt;
+        const auto par = src->find(param);
+        if (par == src->end()) return std::nullopt;
+        for (const std::string& key : {canon_bp + "/" + lw, "_ANY/" + lw, std::string("_ANY/_ANY")}) {
+            const auto it = par->find(key);
+            if (it == par->end() || !it->contains("M")) continue;
+            const double M  = (*it)["M"].get<double>();
+            const double sl = (*it)["sl"].get<double>();
+            const double su = (*it)["su"].get<double>();
+            if (v >= M) return su > 1e-9 ? std::optional<double>((v - M) / su) : std::nullopt;
+            return sl > 1e-9 ? std::optional<double>((v - M) / sl) : std::nullopt;
         }
         return std::nullopt;
     }
@@ -179,17 +250,27 @@ Scorer::Scorer(const std::filesystem::path& distributions_path,
         json d = json::parse(in);
         if (d.contains("prosco_distributions")) impl_->prosco = d["prosco_distributions"];
     }
+    // Auto-discover z_tables.json alongside prosco_distributions.json (mirrors Python).
+    {
+        const auto z_path = prosco_path.parent_path() / "z_tables.json";
+        if (std::filesystem::exists(z_path)) {
+            std::ifstream in(z_path);
+            impl_->z_tables = json::parse(in);
+        }
+    }
     {
         std::ifstream in(weights_path);
         json d = json::parse(in);
         const json& raw = d["penalty_weights"];
+        // Weights already sum to 100 from the Python generator, but renormalise
+        // defensively in case the file is from a different generation.
         double total = 0.0;
         for (const char* k : kIssueKeys) total += raw.value(k, 0.0);
         for (const char* k : kIssueKeys)
             impl_->pair_weights[k] = total <= 0 ? 100.0 / kIssueKeys.size()
                                                 : raw.value(k, 0.0) * 100.0 / total;
         if (d.contains("bucket_weights")) {
-            impl_->w_pairs = d["bucket_weights"].value("W_PAIRS", 0.5);
+            impl_->w_pairs    = d["bucket_weights"].value("W_PAIRS",    0.5);
             impl_->w_residues = d["bucket_weights"].value("W_RESIDUES", 0.5);
         }
     }
@@ -225,68 +306,84 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
         const core::Atom* aa = ares->get_atom(hb.acceptor_atom);
         HBF f{hb.distance, std::nullopt, std::nullopt};
         if (da && aa) {
-            f.donor_angle = hbond_angle(*dres, hb.donor_atom, da->coords, aa->coords, chem);
+            f.donor_angle    = hbond_angle(*dres, hb.donor_atom,    da->coords, aa->coords, chem);
             f.acceptor_angle = hbond_angle(*ares, hb.acceptor_atom, aa->coords, da->coords, chem);
         }
         hbonds.push_back(f);
         ++num_base;
     }
 
-    auto sev_pair = [&](const char* param, double value) {
-        return severity_from_prosco(impl_->prosco_lookup(value, "pairs", param, bp, lw));
-    };
-    auto sev_hb = [&](const char* param, std::optional<double> value) {
-        return severity_from_prosco(impl_->prosco_lookup(value, "hbonds", param, bp, lw));
+    // Helper: Cerny severity for a continuous parameter.
+    auto cerny_sev = [&](std::optional<double> val, const std::string& source,
+                         const char* param) -> double {
+        const auto ps = impl_->prosco_lookup(val, source, param, bp, lw);
+        const auto zp = impl_->zprime_lookup(val, source, param, bp, lw);
+        return severity_from_prosco_zprime(ps, zp);
     };
 
     std::unordered_map<std::string, double> issues;
-    double s;
-    s = std::max(sev_pair("shear", params.shear), sev_pair("stretch", params.stretch));
-    if (s > 0) issues["misaligned"] = s;
-    s = std::max(sev_pair("stagger", params.stagger), sev_pair("buckle", params.buckle));
-    if (s > 0) issues["non_coplanar"] = s;
-    s = std::max(sev_pair("propeller", params.propeller), sev_pair("opening", params.opening));
-    if (s > 0) issues["rotational_distortion"] = s;
 
-    double bad_dist = 0.0, bad_ang = 0.0;
-    for (const auto& hb : hbonds) {
-        bad_dist = std::max(bad_dist, sev_hb("distance", hb.distance));
-        bad_ang = std::max({bad_ang, sev_hb("donor_angle", hb.donor_angle),
-                            sev_hb("acceptor_angle", hb.acceptor_angle)});
+    // ---- 6 pair geometry parameters, each individually ----
+    const std::array<std::pair<const char*, double>, 6> pair_params = {{
+        {"shear",     params.shear},
+        {"stretch",   params.stretch},
+        {"stagger",   params.stagger},
+        {"buckle",    params.buckle},
+        {"propeller", params.propeller},
+        {"opening",   params.opening},
+    }};
+    for (const auto& [param, val] : pair_params) {
+        const double s = cerny_sev(val, "pairs", param);
+        if (s > 0.0) issues[param] = s;
     }
-    if (bad_dist > 0) issues["bad_hbond_distance"] = bad_dist;
-    if (bad_ang > 0) issues["bad_hbond_angles"] = bad_ang;
 
-    s = impl_->hbond_count_severity(bp, lw, num_base);
-    if (s > 0) issues["incorrect_hbond_count"] = s;
+    // ---- H-bond distance: WC cells judge all base-base bonds; other cells
+    //      judge only the strong (primary) bond (hbond_distance_policy.py) ----
+    std::vector<double> bond_distances;
+    bond_distances.reserve(hbonds.size());
+    for (const auto& hb : hbonds) bond_distances.push_back(hb.distance);
+    double dist_sev = 0.0;
+    for (const double d : distances_to_score(bond_distances, bp, lw))
+        dist_sev = std::max(dist_sev, cerny_sev(d, "hbonds", "distance"));
+    if (dist_sev > 0.0) issues["distance"] = dist_sev;
 
-    // Weighted penalties; issue list ordered by descending weight (scorer.py).
-    // Iterate in canonical kIssueKeys order (= Python dict insertion order) then
-    // stable-sort by descending weight so ties break exactly like Python.
-    std::vector<std::pair<std::string, double>> weighted;
+    // ---- H-bond angles: max over donor + acceptor angles across all bonds ----
+    double angle_sev = 0.0;
+    for (const auto& hb : hbonds) {
+        angle_sev = std::max(angle_sev, cerny_sev(hb.donor_angle,    "hbonds", "donor_angle"));
+        angle_sev = std::max(angle_sev, cerny_sev(hb.acceptor_angle, "hbonds", "acceptor_angle"));
+    }
+    if (angle_sev > 0.0) issues["hbond_angles"] = angle_sev;
+
+    // ---- H-bond count: graded (canonical - actual) / canonical ----
+    {
+        const double s = impl_->hbond_count_severity(bp, lw, num_base);
+        if (s > 0.0) issues["incorrect_hbond_count"] = s;
+    }
+
+    // Build weighted penalty list in kIssueKeys order, then sort by descending penalty.
+    std::vector<IssuePenalty> weighted;
     double penalty = 0.0;
     for (const char* k : kIssueKeys) {
         const auto it = issues.find(k);
         if (it == issues.end()) continue;
         const double w = impl_->pair_weights.at(k) * it->second;
-        weighted.emplace_back(k, w);
+        weighted.push_back({k, w});
         penalty += w;
     }
     std::stable_sort(weighted.begin(), weighted.end(),
-                     [](const auto& a, const auto& b) { return a.second > b.second; });
-    const double score = std::max(0.0, std::min(100.0, 100.0 - penalty));
+                     [](const IssuePenalty& a, const IssuePenalty& b) {
+                         return a.weight > b.weight;
+                     });
 
     PairScore out;
     out.res_id1 = pair.res_id1;
     out.res_id2 = pair.res_id2;
     out.bp_type = bp;
     out.lw_class = lw;
-    out.score = score;
+    out.score   = std::max(0.0, std::min(100.0, 100.0 - penalty));
     out.penalty = penalty;
-    for (const auto& [k, w] : weighted) {
-        (void)w;
-        out.issues.push_back(k);
-    }
+    out.issues  = std::move(weighted);
     return out;
 }
 
@@ -312,7 +409,7 @@ std::unordered_map<std::string, std::string> build_predecessor_index(
         std::sort(residues.begin(), residues.end());
         for (std::size_t i = 1; i < residues.size(); ++i) {
             const long prev_num = std::get<0>(residues[i - 1]);
-            const long cur_num = std::get<0>(residues[i]);
+            const long cur_num  = std::get<0>(residues[i]);
             if (prev_num == cur_num || prev_num == cur_num - 1)
                 predecessor[std::get<2>(residues[i])] = std::get<2>(residues[i - 1]);
         }
@@ -332,13 +429,13 @@ std::optional<std::array<double, 7>> build_suite(
     const std::unordered_map<std::string, std::string>& pred_index) {
     const auto pit = pred_index.find(res_id);
     if (pit == pred_index.end()) return std::nullopt;
-    const auto cit = tors.find(res_id);
+    const auto cit  = tors.find(res_id);
     const auto prit = tors.find(pit->second);
     if (cit == tors.end() || prit == tors.end()) return std::nullopt;
-    const ResidueTorsions& cur = cit->second;
+    const ResidueTorsions& cur  = cit->second;
     const ResidueTorsions& pred = prit->second;
     const std::array<std::optional<double>, 7> n = {pred.delta, pred.epsilon, pred.zeta,
-                                                    cur.alpha, cur.beta, cur.gamma, cur.delta};
+                                                     cur.alpha, cur.beta, cur.gamma, cur.delta};
     std::array<double, 7> suite{};
     for (int k = 0; k < 7; ++k) {
         if (!n[k]) return std::nullopt;
@@ -359,7 +456,7 @@ StructureScore Scorer::score_structure(
     for (const auto& chain : structure.chains())
         for (const auto& res : chain.residues()) res_by_id[res.res_id()] = &res;
 
-    const auto tors = compute_all_torsions(structure);
+    const auto tors       = compute_all_torsions(structure);
     const auto pred_index = build_predecessor_index(tors);
 
     StructureScore ss;
@@ -376,9 +473,9 @@ StructureScore Scorer::score_structure(
         if (!suite) continue;
         const double suiteness = impl_->richardson->suiteness(*suite);
         ResidueScore rs;
-        rs.res_id = rid;
+        rs.res_id   = rid;
         rs.suiteness = suiteness;
-        rs.score = std::max(0.0, std::min(100.0, suiteness * 100.0));
+        rs.score    = std::max(0.0, std::min(100.0, suiteness * 100.0));
         ss.residue_scores.push_back(rs);
     }
 
@@ -388,9 +485,9 @@ StructureScore Scorer::score_structure(
         for (const auto& x : v) s += getter(x);
         return s / v.size();
     };
-    const double pm = mean(ss.pair_scores, [](const PairScore& p) { return p.score; });
+    const double pm = mean(ss.pair_scores,    [](const PairScore& p)    { return p.score; });
     const double rm = mean(ss.residue_scores, [](const ResidueScore& r) { return r.score; });
-    ss.pairs_score = round2(pm);
+    ss.pairs_score    = round2(pm);
     ss.residues_score = round2(rm);
     double overall;
     if (!ss.pair_scores.empty() && !ss.residue_scores.empty())

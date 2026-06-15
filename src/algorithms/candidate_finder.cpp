@@ -96,12 +96,52 @@ std::vector<PairCandidate> find_candidates(
         nodes.push_back(n);
     }
 
+    // --- spatial grid (cell = max_distance) ----------------------------------
+    // Replaces the O(n^2) all-pairs scan: bin node origins into cells of side
+    // max_distance, so all neighbors within max_distance lie in the 27 cells
+    // around a node. For each i we gather j>i in those cells, sort ascending,
+    // and emit in (i asc, j asc) order — byte-identical candidate list to the
+    // serial loop.
+    const int n = static_cast<int>(nodes.size());
+    const double cell = max_distance > 0 ? max_distance : 1.0;
+    auto cell_of = [cell](double v) { return static_cast<long>(std::floor(v / cell)); };
+    // Collision-free packed cell key: offset each axis index into [0, 2^21) and
+    // pack into 63 bits. Avoids the false duplicates an XOR hash would produce
+    // when two of the 27 query cells alias to the same bucket.
+    constexpr long kOff = 1L << 20;
+    auto cell_key = [](long ix, long iy, long iz) {
+        return ((ix + kOff) << 42) | ((iy + kOff) << 21) | (iz + kOff);
+    };
+    std::unordered_map<long, std::vector<int>> grid;
+    grid.reserve(n * 2);
+    for (int i = 0; i < n; ++i) {
+        const auto& o = nodes[i].frame->origin;
+        grid[cell_key(cell_of(o.x), cell_of(o.y), cell_of(o.z))].push_back(i);
+    }
+
     std::vector<PairCandidate> out;
-    for (std::size_t i = 0; i < nodes.size(); ++i) {
-        for (std::size_t j = i + 1; j < nodes.size(); ++j) {
-            const double dorg = (nodes[i].frame->origin - nodes[j].frame->origin).norm();
-            if (dorg > max_distance) continue;  // KDTree query_ball_point radius
-            if (!nodes[i].has_gly || !nodes[j].has_gly) continue;
+    std::vector<int> nbrs;
+    for (int i = 0; i < n; ++i) {
+        if (!nodes[i].has_gly) continue;  // no candidate can include a gly-less i
+        const auto& oi = nodes[i].frame->origin;
+        const long cx = cell_of(oi.x), cy = cell_of(oi.y), cz = cell_of(oi.z);
+        nbrs.clear();
+        for (long dx = -1; dx <= 1; ++dx)
+            for (long dy = -1; dy <= 1; ++dy)
+                for (long dz = -1; dz <= 1; ++dz) {
+                    const auto it = grid.find(cell_key(cx + dx, cy + dy, cz + dz));
+                    if (it == grid.end()) continue;
+                    for (int j : it->second) {
+                        if (j <= i || !nodes[j].has_gly) continue;
+                        // Use norm() (not squared) to match the serial reference
+                        // bit-for-bit at the boundary; sqrt is cheap here since
+                        // the grid already restricted j to nearby cells.
+                        if ((oi - nodes[j].frame->origin).norm() > max_distance) continue;
+                        nbrs.push_back(j);
+                    }
+                }
+        std::sort(nbrs.begin(), nbrs.end());  // (i asc, j asc) order preserved
+        for (int j : nbrs) {
             PairCandidate c;
             c.res_id1 = *nodes[i].res_id;
             c.res_id2 = *nodes[j].res_id;

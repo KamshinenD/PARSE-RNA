@@ -1,226 +1,234 @@
 {
-  "schema_version": "3.0-graded",
-  "generated_at": "2026-06-02",
-  "weight_scheme": "log-odds-on-graded-severity",
+  "schema_version": "4.0-per-parameter-shannon",
+  "generated_at": "2026-06-14",
+  "weight_scheme": "shannon-log-odds-per-parameter",
   "method": {
     "_documentation": [
-      "Penalty weights for graded-severity scoring.",
+      "Per-parameter penalty weights using pure Shannon (log-odds) approach.",
       "",
-      "Per-pair severities in [0, 1] are computed for each issue",
-      "(see issues.py and the module docstring of this script for",
-      "the exact severity formulas), then mean-aggregated across",
-      "the GOOD and POOR reference sets.",
+      "For each of the 9 parameters individually:",
+      "  - Compute mean Cerny severity in GOOD set vs POOR set",
+      "  - weight_i = log(s_poor_i / s_good_i)  [clipped to >= 0]",
+      "  - Renormalize to sum = 100",
       "",
-      "LOG-ODDS ON MEAN SEVERITY:",
-      "    s_good_i = (mean_sev_good_i × N_good + 1) / (N_good + 2)",
-      "    s_poor_i = (mean_sev_poor_i × N_poor + 1) / (N_poor + 2)",
-      "    raw_i    = max(0, ln(s_poor_i / s_good_i))",
-      "    weight_i = raw_i / Σ raw_j × 100",
-      "  Issues more severe in poor than good get high weight.",
-      "  Issues at equal mean severity → 0. Issues more severe",
-      "  in good are clipped to 0 (background variation).",
+      "Cerny severity (Cerny et al. NAR 2026 gkaf1335):",
+      "  - severity = 0 if ProSco >= 5 (Preferred)",
+      "  - severity = min(1, |Z'|/5) otherwise",
       "",
       "At runtime:",
-      "    penalty = Σ penalty_weights[i] × severity[i]",
-      "    score   = max(0, min(100, 100 − penalty))",
-      "",
-      "Reference: graded-severity principle from Cerny et al.",
-      "NAR 2026. Continuous-parameter severity uses the paper's",
-      "ProSco (KDE-based probability percentile score), replacing",
-      "the earlier Z' linear ramp after Joe's 2026-05-19 review."
+      "    penalty = \u03a3 penalty_weights[param] \u00d7 severity[param]",
+      "    score   = max(0, min(100, 100 \u2212 penalty))"
     ],
-    "severity_thresholds": {
-      "PROSCO_PREFERRED": 25.0,
-      "PROSCO_OF_CONCERN": 5.0,
-      "rare_conformer_freq": 0.01,
-      "rare_hbond_count_freq": 0.01,
-      "low_suiteness_max": 0.5
-    },
-    "severity_definitions": {
-      "misaligned": "max graded_sev over ProSco(shear), ProSco(stretch)",
-      "non_coplanar": "max graded_sev over ProSco(stagger), ProSco(buckle)",
-      "rotational_distortion": "max graded_sev over ProSco(propeller), ProSco(opening)",
-      "bad_hbond_distance": "max graded_sev over ProSco(distance) across all base-base H-bonds",
-      "bad_hbond_angles": "max graded_sev over ProSco(donor_angle), ProSco(acceptor_angle)",
-      "incorrect_hbond_count": "1.0 if cell freq of num_base_hbonds < 1%, else 0 (binary)",
-      "unexpected_conformer": "fraction of classifiable residues with conformer cell freq < 1%",
-      "low_suiteness": "1 − avg_eff_suiteness / 0.5 when avg < 0.5 (else 0); '!!' counts as 0"
-    }
+    "severity_definition": "Cerny: 0 if ProSco >= 5, else min(1, |Z'|/5)",
+    "prosco_preferred_threshold": 5.0
   },
   "good_reference_set": {
-    "n_pairs": 48596,
+    "n_pairs": 368169,
     "feature_dir": "/Users/kdewan2/Desktop/Projects/find-pair-score-rna/prototyped-pair-finder-main/data/reference/features",
     "distributions": "/Users/kdewan2/Desktop/Projects/find-pair-score-rna/prototyped-pair-finder-main/data/reference/parameter_distributions.json",
     "mean_severity": {
-      "misaligned": 0.16273288953823306,
-      "non_coplanar": 0.20659675693472732,
-      "rotational_distortion": 0.20373176804675305,
-      "bad_hbond_distance": 0.21400566919087824,
-      "bad_hbond_angles": 0.257543028232779,
-      "incorrect_hbond_count": 0.005802946744588032,
-      "unexpected_conformer": 0.0798728290394271,
-      "low_suiteness": 0.15430090953987918
+      "stagger": 0.033176,
+      "hbond_angles": 0.064973,
+      "stretch": 0.028805,
+      "opening": 0.025829,
+      "distance": 0.045089,
+      "propeller": 0.024699,
+      "buckle": 0.032906,
+      "shear": 0.089615,
+      "incorrect_hbond_count": 0.018378
     }
   },
   "poor_reference_set": {
-    "n_pairs": 7682,
+    "n_pairs": 509774,
     "feature_dir": "/Users/kdewan2/Desktop/Projects/find-pair-score-rna/prototyped-pair-finder-main/data/reference/features_poor",
     "mean_severity": {
-      "misaligned": 0.3679130434782601,
-      "non_coplanar": 0.4251503514709718,
-      "rotational_distortion": 0.369406925279873,
-      "bad_hbond_distance": 0.4119265165321532,
-      "bad_hbond_angles": 0.5031219734444181,
-      "incorrect_hbond_count": 0.022520177037229888,
-      "unexpected_conformer": 0.07504556105180943,
-      "low_suiteness": 0.1779793022650351
+      "stagger": 0.090777,
+      "hbond_angles": 0.13283,
+      "stretch": 0.056675,
+      "opening": 0.050206,
+      "distance": 0.086278,
+      "propeller": 0.046402,
+      "buckle": 0.058683,
+      "shear": 0.118088,
+      "incorrect_hbond_count": 0.021449
     }
   },
   "raw_logodds_nats": {
-    "misaligned": 0.8157,
-    "non_coplanar": 0.7217,
-    "rotational_distortion": 0.5951,
-    "bad_hbond_distance": 0.6548,
-    "bad_hbond_angles": 0.6696,
-    "incorrect_hbond_count": 1.3581,
-    "unexpected_conformer": 0.0,
-    "low_suiteness": 0.1431
+    "stagger": 1.0065,
+    "hbond_angles": 0.7151,
+    "stretch": 0.6767,
+    "opening": 0.6646,
+    "distance": 0.6489,
+    "propeller": 0.6305,
+    "buckle": 0.5784,
+    "shear": 0.2759,
+    "incorrect_hbond_count": 0.1545
   },
   "penalty_weights": {
-    "misaligned": 16.4525,
-    "non_coplanar": 14.555,
-    "rotational_distortion": 12.0029,
-    "bad_hbond_distance": 13.2073,
-    "bad_hbond_angles": 13.5051,
-    "incorrect_hbond_count": 27.3901,
-    "unexpected_conformer": 0.0,
-    "low_suiteness": 2.887
+    "stagger": 18.8096,
+    "hbond_angles": 13.3629,
+    "stretch": 12.6462,
+    "opening": 12.419,
+    "distance": 12.1265,
+    "propeller": 11.7832,
+    "buckle": 10.8098,
+    "shear": 5.1558,
+    "incorrect_hbond_count": 2.8871
+  },
+  "features": [
+    "shear",
+    "stretch",
+    "stagger",
+    "buckle",
+    "propeller",
+    "opening",
+    "distance",
+    "hbond_angles",
+    "incorrect_hbond_count"
+  ],
+  "report_groups": {
+    "Pair In-Plane Displacement": [
+      "shear",
+      "stretch"
+    ],
+    "Pair Non-Coplanarity": [
+      "stagger",
+      "buckle"
+    ],
+    "Propeller Twist": [
+      "propeller"
+    ],
+    "Pair Opening": [
+      "opening"
+    ],
+    "H-Bond Distance": [
+      "distance"
+    ],
+    "H-Bond Angles": [
+      "hbond_angles"
+    ],
+    "Incorrect H-Bond Count": [
+      "incorrect_hbond_count"
+    ]
   },
   "summary_table": [
     {
-      "issue": "incorrect_hbond_count",
-      "mean_sev_good": 0.0058,
-      "mean_sev_poor": 0.0225,
-      "ratio_poor_over_good": 3.88,
-      "raw_logodds": 1.3581,
-      "weight": 27.3901
+      "param": "stagger",
+      "mean_sev_good": 0.0332,
+      "mean_sev_poor": 0.0908,
+      "ratio_poor_over_good": 2.74,
+      "raw_logodds": 1.0065,
+      "weight": 18.81
     },
     {
-      "issue": "misaligned",
-      "mean_sev_good": 0.1627,
-      "mean_sev_poor": 0.3679,
-      "ratio_poor_over_good": 2.26,
-      "raw_logodds": 0.8157,
-      "weight": 16.4525
+      "param": "hbond_angles",
+      "mean_sev_good": 0.065,
+      "mean_sev_poor": 0.1328,
+      "ratio_poor_over_good": 2.04,
+      "raw_logodds": 0.7151,
+      "weight": 13.36
     },
     {
-      "issue": "non_coplanar",
-      "mean_sev_good": 0.2066,
-      "mean_sev_poor": 0.4252,
-      "ratio_poor_over_good": 2.06,
-      "raw_logodds": 0.7217,
-      "weight": 14.555
+      "param": "stretch",
+      "mean_sev_good": 0.0288,
+      "mean_sev_poor": 0.0567,
+      "ratio_poor_over_good": 1.97,
+      "raw_logodds": 0.6767,
+      "weight": 12.65
     },
     {
-      "issue": "bad_hbond_angles",
-      "mean_sev_good": 0.2575,
-      "mean_sev_poor": 0.5031,
-      "ratio_poor_over_good": 1.95,
-      "raw_logodds": 0.6696,
-      "weight": 13.5051
+      "param": "opening",
+      "mean_sev_good": 0.0258,
+      "mean_sev_poor": 0.0502,
+      "ratio_poor_over_good": 1.94,
+      "raw_logodds": 0.6646,
+      "weight": 12.42
     },
     {
-      "issue": "bad_hbond_distance",
-      "mean_sev_good": 0.214,
-      "mean_sev_poor": 0.4119,
-      "ratio_poor_over_good": 1.92,
-      "raw_logodds": 0.6548,
-      "weight": 13.2073
+      "param": "distance",
+      "mean_sev_good": 0.0451,
+      "mean_sev_poor": 0.0863,
+      "ratio_poor_over_good": 1.91,
+      "raw_logodds": 0.6489,
+      "weight": 12.13
     },
     {
-      "issue": "rotational_distortion",
-      "mean_sev_good": 0.2037,
-      "mean_sev_poor": 0.3694,
-      "ratio_poor_over_good": 1.81,
-      "raw_logodds": 0.5951,
-      "weight": 12.0029
+      "param": "propeller",
+      "mean_sev_good": 0.0247,
+      "mean_sev_poor": 0.0464,
+      "ratio_poor_over_good": 1.88,
+      "raw_logodds": 0.6305,
+      "weight": 11.78
     },
     {
-      "issue": "low_suiteness",
-      "mean_sev_good": 0.1543,
-      "mean_sev_poor": 0.178,
-      "ratio_poor_over_good": 1.15,
-      "raw_logodds": 0.1431,
-      "weight": 2.887
+      "param": "buckle",
+      "mean_sev_good": 0.0329,
+      "mean_sev_poor": 0.0587,
+      "ratio_poor_over_good": 1.78,
+      "raw_logodds": 0.5784,
+      "weight": 10.81
     },
     {
-      "issue": "unexpected_conformer",
-      "mean_sev_good": 0.0799,
-      "mean_sev_poor": 0.075,
-      "ratio_poor_over_good": 0.94,
-      "raw_logodds": 0.0,
-      "weight": 0.0
+      "param": "shear",
+      "mean_sev_good": 0.0896,
+      "mean_sev_poor": 0.1181,
+      "ratio_poor_over_good": 1.32,
+      "raw_logodds": 0.2759,
+      "weight": 5.16
+    },
+    {
+      "param": "incorrect_hbond_count",
+      "mean_sev_good": 0.0184,
+      "mean_sev_poor": 0.0214,
+      "ratio_poor_over_good": 1.17,
+      "raw_logodds": 0.1545,
+      "weight": 2.89
     }
   ],
   "bucket_weights": {
     "_documentation": [
-      "Bucket weights for the overall structure score:",
-      "  overall = W_PAIRS · mean(pair scores) + W_RESIDUES · mean(residue scores).",
-      "",
-      "Same Shannon-information family as the per-issue penalty weights",
-      "(-log P(issue | good)), generalised from a binary event to a",
-      "continuous score via mutual information between each bucket's",
-      "score distribution and the good/poor label:",
-      "",
-      "    Bin scores into N equal-width bins on [0, 100].",
-      "    MI_b = Σ_(bin,label) P(bin,label) · log2(P(bin,label) / (P(bin)·P(label)))",
-      "    w_b  = MI_b / Σ MI_*",
-      "",
-      "Higher MI → bucket carries more information about the label.",
-      "Runs the production Scorer end-to-end on the curated good/poor",
-      "reference sets (separate pass: residue scoring covers all",
-      "modelled residues, not just those in classified pairs)."
+      "Bucket weights for overall = W_PAIRS\u00b7mean(pair) + W_RESIDUES\u00b7mean(residue).",
+      "Derived via mutual information MI(score_bin; good/poor label) for each bucket.",
+      "  w_b = MI_b / \u03a3 MI_*",
+      "Same Shannon-information family as per-parameter penalty weights.",
+      "20 equal-width bins on [0,100]; Laplace smoothing eps=0.5/bin."
     ],
-    "W_PAIRS": 0.7722,
-    "W_RESIDUES": 0.2278,
+    "W_PAIRS": 0.6502,
+    "W_RESIDUES": 0.3498,
     "n_bins": 20,
-    "score_range": [
-      0,
-      100
-    ],
     "mutual_information_bits": {
-      "MI_pair": 0.1182,
-      "MI_residue": 0.0349
+      "MI_pair": 0.0921,
+      "MI_residue": 0.0496
     },
     "kl_divergences_bits": {
       "pair": {
-        "poor||good": 1.6351,
-        "good||poor": 2.0613
+        "poor||good": 0.407,
+        "good||poor": 0.3617
       },
       "residue": {
-        "poor||good": 0.4912,
-        "good||poor": 0.5222
+        "poor||good": 0.1964,
+        "good||poor": 0.2103
       }
     },
     "supporting_metrics": {
       "pair_bucket": {
-        "mean_good": 83.93,
-        "mean_poor": 63.56,
-        "n_good": 715,
-        "n_poor": 64
+        "mean_good": 95.82,
+        "mean_poor": 91.33,
+        "n_good": 942,
+        "n_poor": 1075
       },
       "residue_bucket": {
-        "mean_good": 51.39,
-        "mean_poor": 35.69,
-        "n_good": 1035,
-        "n_poor": 88
+        "mean_good": 51.22,
+        "mean_poor": 41.76,
+        "n_good": 1296,
+        "n_poor": 1347
       }
     },
     "reference_sets": {
       "good": "/Users/kdewan2/Desktop/Projects/find-pair-score-rna/prototyped-pair-finder-main/data/reference/reference_set.json",
       "poor": "/Users/kdewan2/Desktop/Projects/find-pair-score-rna/prototyped-pair-finder-main/data/reference/reference_set_poor.json",
       "json_dir": "/Users/kdewan2/Desktop/Projects/find_pair_2/data/json",
-      "load_errors_or_missing": 239
+      "load_errors_or_missing": 0
     }
   }
 }

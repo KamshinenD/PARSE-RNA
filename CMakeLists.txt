@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)  # FetchContent EXCLUDE_FROM_ALL/SYSTEM
 project(pairfinder
     VERSION 0.1.0
-    DESCRIPTION "Fast RNA base-pair finder + scorer (faithful C++ port)"
+    DESCRIPTION "Fast RNA base-pair finder + scorer"
     LANGUAGES CXX)
 
 # ---- Standard / options -----------------------------------------------------

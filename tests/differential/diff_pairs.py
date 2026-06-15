@@ -22,8 +22,7 @@ from pair_finder.finder import FinderConfig, PairFinder  # noqa: E402
 
 
 def python_pairs(pdb):
-    fr = PairFinder(JSON_DIR, FinderConfig(min_score=0.0,
-                                           selection_strategy="helix_priority")).find_pairs(pdb)
+    fr = PairFinder(JSON_DIR, FinderConfig(min_score=0.0, selection_strategy="helix_priority")).find_pairs(pdb)
     out = {}
     for c in fr.pairs:
         out[tuple(sorted([c.res_id1, c.res_id2]))] = c.lw_class or "None"

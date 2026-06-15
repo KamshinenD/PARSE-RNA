@@ -44,7 +44,10 @@ def cpp_scores(binary, pdb):
         if not line:
             continue
         f = line.split("\t")
-        out[(f[0], f[1])] = float(f[2])
+        # Format: res1 \t res2 \t lw_class \t score \t penalty [\t issues]
+        if len(f) < 4:
+            continue
+        out[(f[0], f[1])] = float(f[3])
     return out
 
 

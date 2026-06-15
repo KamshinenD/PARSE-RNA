@@ -157,9 +157,30 @@ struct Segment {
 std::vector<Segment> detect_segments(const std::vector<Cand*>& cands, const RNAChains& ch) {
     const int n = static_cast<int>(cands.size());
     std::vector<std::vector<int>> adj(n);
+    // O(n) edge build: a pair is consecutive only with the candidate whose
+    // residues are {next(a1),prev(a2)} or {prev(a1),next(a2)}. Index by residue
+    // pair and look those two up, instead of testing all O(n^2) pairs. Identical
+    // edge set -> identical components/segments (pairs_consecutive kept as spec).
+    auto pkey = [](const std::string& x, const std::string& y) {
+        return x < y ? x + '\x01' + y : y + '\x01' + x;
+    };
+    std::unordered_map<std::string, std::vector<int>> by_pair;
+    by_pair.reserve(static_cast<std::size_t>(n) * 2);
     for (int i = 0; i < n; ++i)
-        for (int j = i + 1; j < n; ++j)
-            if (pairs_consecutive(*cands[i], *cands[j], ch)) { adj[i].push_back(j); adj[j].push_back(i); }
+        by_pair[pkey(cands[i]->res_id1, cands[i]->res_id2)].push_back(i);
+    auto link = [&](int i, const std::string& r1, const std::string& r2) {
+        if (r1.empty() || r2.empty()) return;
+        const auto it = by_pair.find(pkey(r1, r2));
+        if (it == by_pair.end()) return;
+        for (int j : it->second)
+            if (j != i) { adj[i].push_back(j); adj[j].push_back(i); }
+    };
+    for (int i = 0; i < n; ++i) {
+        const std::string& a1 = cands[i]->res_id1;
+        const std::string& a2 = cands[i]->res_id2;
+        link(i, ch.next_residue(a1), ch.prev_residue(a2));
+        link(i, ch.prev_residue(a1), ch.next_residue(a2));
+    }
     std::vector<char> visited(n, 0);
     std::vector<Segment> segs;
     for (int s = 0; s < n; ++s) {
@@ -243,16 +264,38 @@ std::vector<Cand*> cww_helix_phase(const std::vector<Cand*>& cww, const RNAChain
     // potential extensions: helix ends -> candidate extensions.
     std::unordered_set<const Cand*> selected_set(selected.begin(), selected.end());
     std::vector<Cand*> extensions;  // flat list (we only need the union for overlap check)
+    // O(n) via residue-pair indexes (same neighbor-pair trick as detect_segments):
+    // a pair is consecutive only with candidates whose residues are its two
+    // chain-stepped neighbor-pairs, so look those up instead of scanning all.
+    auto pkey2 = [](const std::string& x, const std::string& y) {
+        return x < y ? x + '\x01' + y : y + '\x01' + x;
+    };
+    std::unordered_map<std::string, std::vector<Cand*>> sel_by_pair, can_by_pair;
+    for (Cand* c : selected) sel_by_pair[pkey2(c->res_id1, c->res_id2)].push_back(c);
+    for (Cand* c : canonical) can_by_pair[pkey2(c->res_id1, c->res_id2)].push_back(c);
     for (Cand* pr : selected) {
+        const std::string nbr[2][2] = {
+            {ch.next_residue(pr->res_id1), ch.prev_residue(pr->res_id2)},
+            {ch.prev_residue(pr->res_id1), ch.next_residue(pr->res_id2)}};
         int consec = 0;
-        for (Cand* other : selected)
-            if (other != pr && pairs_consecutive(*pr, *other, ch)) ++consec;
+        for (const auto& s : nbr) {
+            if (s[0].empty() || s[1].empty()) continue;
+            const auto it = sel_by_pair.find(pkey2(s[0], s[1]));
+            if (it != sel_by_pair.end())
+                for (Cand* o : it->second)
+                    if (o != pr) ++consec;
+        }
         if (consec > 1) continue;
-        for (Cand* cand : canonical) {
-            if (selected_set.count(cand)) continue;
-            if (used.count(cand->res_id1) || used.count(cand->res_id2)) continue;
-            if (cand->quality_score < kMinHelixQuality) continue;
-            if (pairs_consecutive(*pr, *cand, ch)) extensions.push_back(cand);
+        for (const auto& s : nbr) {
+            if (s[0].empty() || s[1].empty()) continue;
+            const auto it = can_by_pair.find(pkey2(s[0], s[1]));
+            if (it == can_by_pair.end()) continue;
+            for (Cand* cand : it->second) {
+                if (selected_set.count(cand)) continue;
+                if (used.count(cand->res_id1) || used.count(cand->res_id2)) continue;
+                if (cand->quality_score < kMinHelixQuality) continue;
+                extensions.push_back(cand);
+            }
         }
     }
     std::vector<int> isolated;

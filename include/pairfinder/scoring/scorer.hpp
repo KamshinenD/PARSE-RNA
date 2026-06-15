@@ -28,13 +28,19 @@ namespace pairfinder::scoring {
 namespace classification = pairfinder::algorithms::classification;
 namespace hbond = pairfinder::algorithms::hbond;
 
+/// One triggered issue and its weighted penalty contribution (weight × severity).
+struct IssuePenalty {
+    std::string issue;
+    double weight = 0.0;  ///< pair_weight[issue] × severity
+};
+
 /// Per-pair scoring result.
 struct PairScore {
     std::string res_id1, res_id2;
     std::string bp_type, lw_class;
     double score = 0.0;
     double penalty = 0.0;
-    std::vector<std::string> issues;  ///< triggered issue keys, sorted by descending penalty
+    std::vector<IssuePenalty> issues;  ///< triggered issues, sorted by descending penalty
 };
 
 /// Per-residue backbone score (suiteness * 100).
