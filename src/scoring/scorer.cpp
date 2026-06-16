@@ -446,6 +446,21 @@ std::optional<std::array<double, 7>> build_suite(
 
 double round2(double v) { return std::round(v * 100.0) / 100.0; }
 
+// DNA residues have no RNA backbone suite — exclude them so they don't deflate
+// residues_score for DNA/RNA complexes (matches the wwPDB rnasuiteness RNA-only
+// convention and the Python backbone scorer). res_id is chain-resname-num
+// (e.g. N-DA-102); DNA resnames are two-letter D<base>.
+bool is_dna_residue(const std::string& res_id) {
+    const auto a = res_id.find('-');
+    if (a == std::string::npos) return false;
+    const auto b = res_id.find('-', a + 1);
+    const std::string name =
+        res_id.substr(a + 1, (b == std::string::npos ? res_id.size() : b) - a - 1);
+    return name.size() == 2 && name[0] == 'D' &&
+           (name[1] == 'A' || name[1] == 'C' || name[1] == 'G' ||
+            name[1] == 'T' || name[1] == 'U');
+}
+
 }  // namespace
 
 StructureScore Scorer::score_structure(
@@ -469,9 +484,22 @@ StructureScore Scorer::score_structure(
     }
     for (const auto& [rid, t] : tors) {
         (void)t;
+        if (is_dna_residue(rid)) continue;  // RNA-only backbone score (see helper)
         const auto suite = build_suite(rid, tors, pred_index);
         if (!suite) continue;
         const double suiteness = impl_->richardson->suiteness(*suite);
+        if (suiteness <= 0.0) {
+            // L-RNA enantiomer check: a rejected suite may be mirror-image RNA
+            // (e.g. a Spiegelmer aptamer). Negate every torsion (360 - t) and
+            // re-classify; if the mirror fits a D-RNA cluster it is L-RNA —
+            // exclude it (D-RNA suiteness doesn't apply; the backbone is
+            // genuinely high quality). A real D-RNA outlier won't fit even when
+            // mirrored, so it still scores 0. Mirrors the Python backbone scorer.
+            std::array<double, 7> mirror;
+            for (int k = 0; k < 7; ++k)
+                mirror[k] = std::fmod(360.0 - (*suite)[k], 360.0);
+            if (impl_->richardson->suiteness(mirror) > 0.0) continue;
+        }
         ResidueScore rs;
         rs.res_id   = rid;
         rs.suiteness = suiteness;
