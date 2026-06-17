@@ -106,7 +106,7 @@ A JSON object per structure:
       "res_id1": "A-G-1", "res_id2": "A-C-72",
       "sequence": "GC",
       "pair_category": "base-base",
-      "classification": { "lw_class": "cWW", "is_ambiguous": false, "lw_class_confidence": [0.95] },
+      "classification": { "lw_class": "cWW", "is_ambiguous": false },
       "geometry":   { "dorg": 2.40, "d_v": 0.11, "plane_angle": 24.08, "dNN": 8.42 },
       "rigid_body": { "shear": 2.22, "stretch": 0.89, "stagger": -0.11, "buckle": -12.78, "propeller": 20.40, "opening": 0.33 },
       "num_hbonds": 2,

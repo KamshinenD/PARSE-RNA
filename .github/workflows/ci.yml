@@ -35,3 +35,15 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+      - name: Fetch and run on real RNA (1GID)
+        run: |
+          ./build/pairfinder 1GID --out 1GID.json
+          python3 -c "
+          import json, sys
+          d = json.load(open('1GID.json'))
+          n = d['n_pairs']
+          print(f'1GID: {n} pairs selected, overall_score={d[\"overall_score\"]}')
+          assert n > 0, 'expected pairs but got 0'
+          print('OK')
+          "
