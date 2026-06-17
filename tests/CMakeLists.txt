@@ -5,6 +5,10 @@ add_executable(core_smoke_test core_smoke_test.cpp)
 target_link_libraries(core_smoke_test PRIVATE pairfinder_core)
 add_test(NAME core_smoke_test COMMAND core_smoke_test)
 
+add_executable(suiteness_test suiteness_test.cpp)
+target_link_libraries(suiteness_test PRIVATE pairfinder_core)
+add_test(NAME suiteness_test COMMAND suiteness_test)
+
 # Differential tests vs the Python / x3dna oracles. These need the find_pair_2
 # reference data; registered only when present so a bare checkout still builds.
 find_package(Python3 COMPONENTS Interpreter QUIET)
