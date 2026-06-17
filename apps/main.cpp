@@ -599,7 +599,8 @@ json frame_json(const pairfinder::core::ReferenceFrame& f) {
 }
 
 // Run the full pipeline and emit the find_pairs.py JSON (default + --details).
-int find_json(const std::string& path, bool score, bool details, const std::string& out_path) {
+int find_json(const std::string& path, bool score, bool details, bool emit_classified,
+              const std::string& out_path) {
     using namespace pairfinder;
     // Per-stage wall-clock when PAIRFINDER_PROFILE is set (-> stderr).
     const bool prof = std::getenv("PAIRFINDER_PROFILE") != nullptr;
@@ -637,6 +638,23 @@ int find_json(const std::string& path, bool score, bool details, const std::stri
     int candidates_valid = 0;
     for (const auto& sc : scored)
         if (sc.validation.is_valid) ++candidates_valid;
+
+    // Optionally capture every valid classified candidate (pre-selection) so a
+    // downstream comparison can measure identification recall — whether a pair was
+    // found + classified at all, independent of helix-priority selection.
+    json classified = json::array();
+    if (emit_classified) {
+        for (const auto& sc : scored) {
+            if (!sc.validation.is_valid) continue;
+            if (sc.lw_class.empty() && sc.lw_class_display.empty()) continue;
+            classified.push_back(json{
+                {"res_id1", sc.res_id1},
+                {"res_id2", sc.res_id2},
+                {"lw_class", sc.lw_class_display.empty() ? sc.lw_class : sc.lw_class_display},
+                {"pair_category", sc.pair_category},
+                {"is_ambiguous", sc.is_ambiguous}});
+        }
+    }
 
     const auto chains = algorithms::RNAChains::from_structure(structure);
     lap("rna_chains");
@@ -728,6 +746,7 @@ int find_json(const std::string& path, bool score, bool details, const std::stri
         pairs.push_back(std::move(p));
     }
     out["pairs"] = std::move(pairs);
+    if (emit_classified) out["classified"] = std::move(classified);
 
     if (score) {
         out["overall_score"] = round_to(ss.overall, 2);
@@ -964,12 +983,13 @@ int main(int argc, char** argv) {
     // pipeline and emits the find_pairs.py-parity JSON. A bare PDB id is fetched
     // from RCSB (cached) unless an existing file path is given.
     const std::string input = args[0];
-    bool score = true, details = false, allow_download = true;
+    bool score = true, details = false, allow_download = true, emit_classified = false;
     std::string out_path, cache_override;
     for (std::size_t i = 1; i < args.size(); ++i) {
         if (args[i] == "--no-score") score = false;
         else if (args[i] == "--score") score = true;
         else if (args[i] == "--details") details = true;
+        else if (args[i] == "--classified") emit_classified = true;
         else if (args[i] == "--no-download") allow_download = false;
         else if (args[i] == "--out" && i + 1 < args.size()) out_path = args[++i];
         else if (args[i] == "--cache-dir" && i + 1 < args.size()) cache_override = args[++i];
@@ -978,7 +998,7 @@ int main(int argc, char** argv) {
     try {
         const std::filesystem::path file =
             resolve_input(input, cache_dir(cache_override), allow_download);
-        return find_json(file.string(), score, details, out_path);
+        return find_json(file.string(), score, details, emit_classified, out_path);
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";
         return 1;
