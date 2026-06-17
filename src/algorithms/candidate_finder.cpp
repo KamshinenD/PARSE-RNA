@@ -4,6 +4,7 @@
  */
 #include <pairfinder/algorithms/candidate_finder.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <unordered_map>
 
