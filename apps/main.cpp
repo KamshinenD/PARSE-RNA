@@ -695,11 +695,8 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         if (sc.lw_class_display.empty() && sc.lw_class.empty()) {
             p["classification"] = nullptr;
         } else {
-            json conf = json::array();
-            for (double c : sc.lw_class_confidence) conf.push_back(round_to(c, 2));
             p["classification"] = json{
                 {"lw_class", sc.lw_class_display.empty() ? sc.lw_class : sc.lw_class_display},
-                {"lw_class_confidence", conf},
                 {"is_ambiguous", sc.is_ambiguous}};
         }
 
