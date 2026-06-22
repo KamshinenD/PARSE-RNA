@@ -45,6 +45,7 @@ add_library(pairfinder_core
     src/scoring/richardson.cpp
     src/scoring/scorer.cpp
     src/io/pdb_parser.cpp
+    src/pipeline.cpp
 )
 add_library(pairfinder::core ALIAS pairfinder_core)
 target_include_directories(pairfinder_core
@@ -89,8 +90,14 @@ target_compile_options(pairfinder_core PRIVATE
     $<$<BOOL:${PAIRFINDER_WARNINGS_AS_ERRORS}>:-Werror>)
 
 # ---- CLI app ----------------------------------------------------------------
-add_executable(pairfinder apps/main.cpp)
+add_executable(pairfinder
+    apps/main.cpp
+    apps/support/cli_support.cpp
+    apps/differential/differential_commands.cpp)
 target_link_libraries(pairfinder PRIVATE pairfinder_core)
+# apps/ on the include path so the CLI TUs include their siblings as
+# "support/cli_support.hpp" / "differential/differential_commands.hpp" (no ../ paths).
+target_include_directories(pairfinder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
 
 # Make the build tree self-contained: copy resources/ next to the binary so the
 # exe-relative locator finds it (build/<cfg>/resources or build/resources).

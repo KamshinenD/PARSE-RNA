@@ -20,15 +20,16 @@ constexpr double kCwwGeomBoost = 0.85, kNoncwwGeomBoost = 1.8;
 constexpr double kCwwLenFull = 0.5, kCwwLenZero = 0.8;
 constexpr double kNoncwwLenFull = 1.0, kNoncwwLenZero = 2.0;
 
+constexpr int kNoncwwDefaultHbondCount = 1;
+
 int expected_count_for(const std::string& lw, const std::string& seq) {
     static const std::unordered_map<std::string, int> by_class = {
-        {"tWW", 2}, {"cWH", 2}, {"tWH", 2}, {"cWS", 1}, {"tWS", 2}, {"cHH", 2},
-        {"tHH", 1}, {"cHS", 1}, {"tHS", 2}, {"cSS", 1}, {"tSS", 1}};
+        {"tWW", 2}, {"cWH", 2}, {"tWH", 2}};
     static const std::unordered_map<std::string, int> by_seq = {
         {"GC", 3}, {"CG", 3}, {"AU", 2}, {"UA", 2}, {"GU", 2}, {"UG", 2}};
     if (!lw.empty() && lw != "cWW") {
         auto it = by_class.find(lw);
-        return it == by_class.end() ? 2 : it->second;
+        return it == by_class.end() ? kNoncwwDefaultHbondCount : it->second;
     }
     auto it = by_seq.find(seq);
     return it == by_seq.end() ? 2 : it->second;

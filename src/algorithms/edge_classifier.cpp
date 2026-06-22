@@ -680,7 +680,14 @@ GeoResult classify_by_geometry(const ReferenceFrame& f1, const ReferenceFrame& f
         LwResult canon_alt = canonicalize_lw(orientation, af1, af2);
         if (canon_alt.lw_class == out.lw_class) {
             out.uncertain = false;
-        } else if (canon_alt.swapped != out.swapped) {
+        } else if (canon_alt.swapped != out.swapped &&
+                   (out.lw_class.find('S') != std::string::npos ||
+                    canon_alt.lw_class.find('S') != std::string::npos)) {
+            // For a W/S boundary the swapped-flag mismatch is a canonical-sort
+            // artifact and that path isn't reliably separable, so commit to the
+            // geometric primary. A *pure W/H* boundary ambiguity (tWW vs tWH,
+            // cWW vs cHH) is a genuine class difference DSSR also leaves "." —
+            // keep it rather than silently committing.
             out.uncertain = false;
         } else {
             out.alt_class = canon_alt.lw_class;

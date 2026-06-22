@@ -51,7 +51,7 @@ automatically.
 ctest --test-dir build --output-on-failure
 ```
 
-All 12 tests should pass. (A few are differential tests that need the Python
+All 21 tests should pass. (A few differential tests need the Python
 reference repo + its data; if that isn't present they are skipped, not failed —
 the build itself is still good.)
 

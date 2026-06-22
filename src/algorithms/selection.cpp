@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -323,6 +324,57 @@ std::vector<Cand*> cww_helix_phase(const std::vector<Cand*>& cww, const RNAChain
     return selected;
 }
 
+// ---- shared-residue tie-break: H-bond strength first, then planarity ----
+// When several candidates contest one residue, prefer the strongest interaction
+// (most base-base H-bonds), breaking ties by coplanarity (plane_angle, then d_v).
+// Coplanarity alone over-weights flatness vs bond strength; H-bonds-first wins.
+using PlanarityKey = std::tuple<int, double, double>;
+
+PlanarityKey planarity_rank_key(const Cand& c) {
+    return {-c.num_hbonds, c.validation.plane_angle, c.validation.d_v};
+}
+
+std::optional<std::vector<int>> resolve_shared_residue_conflict(
+    const std::vector<Cand*>& candidates, const std::vector<int>& component,
+    const std::vector<std::vector<int>>& conflicts) {
+    if (component.size() < 2) return std::nullopt;
+
+    std::unordered_set<std::string> shared = {candidates[component[0]]->res_id1,
+                                              candidates[component[0]]->res_id2};
+    for (std::size_t i = 1; i < component.size(); ++i) {
+        std::unordered_set<std::string> pair_res = {candidates[component[i]]->res_id1,
+                                                    candidates[component[i]]->res_id2};
+        std::unordered_set<std::string> inter;
+        for (const auto& r : shared)
+            if (pair_res.count(r)) inter.insert(r);
+        shared = std::move(inter);
+        if (shared.empty()) return std::nullopt;
+    }
+
+    for (std::size_t ii = 0; ii < component.size(); ++ii)
+        for (std::size_t jj = ii + 1; jj < component.size(); ++jj) {
+            const int i = component[ii], j = component[jj];
+            bool found = false;
+            for (int nb : conflicts[i])
+                if (nb == j) {
+                    found = true;
+                    break;
+                }
+            if (!found) return std::nullopt;
+        }
+
+    int best = component[0];
+    PlanarityKey best_key = planarity_rank_key(*candidates[best]);
+    for (std::size_t i = 1; i < component.size(); ++i) {
+        const PlanarityKey key = planarity_rank_key(*candidates[component[i]]);
+        if (key < best_key) {
+            best_key = key;
+            best = component[i];
+        }
+    }
+    return std::vector<int>{best};
+}
+
 // ---- GlobalOptimalStrategy ----
 constexpr double kMinQualityThreshold = 0.5;
 constexpr int kMaxBacktrack = 30;
@@ -384,6 +436,11 @@ std::vector<Cand*> global_optimal(const std::vector<Cand*>& input, double min_sc
                 if (!visited[nb]) { visited[nb] = 1; q.push_back(nb); }
         }
         if (comp.size() == 1) { best_indices.push_back(comp[0]); continue; }
+
+        if (auto planarity_pick = resolve_shared_residue_conflict(valid, comp, conflicts)) {
+            best_indices.push_back((*planarity_pick)[0]);
+            continue;
+        }
 
         // Local conflict graph.
         const int m = static_cast<int>(comp.size());

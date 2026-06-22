@@ -1,13 +1,25 @@
 # Lightweight tests with no external framework (CTest-driven).
 # Each test is a small executable that returns non-zero on failure.
 
-add_executable(core_smoke_test core_smoke_test.cpp)
-target_link_libraries(core_smoke_test PRIVATE pairfinder_core)
-add_test(NAME core_smoke_test COMMAND core_smoke_test)
+set(_pf_test_inc ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(suiteness_test suiteness_test.cpp)
-target_link_libraries(suiteness_test PRIVATE pairfinder_core)
-add_test(NAME suiteness_test COMMAND suiteness_test)
+macro(pf_add_unit_test name)
+    add_executable(${name} ${name}.cpp)
+    target_link_libraries(${name} PRIVATE pairfinder_core)
+    target_include_directories(${name} PRIVATE ${_pf_test_inc})
+    add_test(NAME ${name} COMMAND ${name})
+endmacro()
+
+pf_add_unit_test(core_smoke_test)
+pf_add_unit_test(suiteness_test)
+pf_add_unit_test(superposition_test)
+pf_add_unit_test(validate_pair_test)
+pf_add_unit_test(parse_res_seq_test)
+pf_add_unit_test(base_typing_test)
+pf_add_unit_test(nucleotide_registry_test)
+pf_add_unit_test(hbond_chemistry_test)
+pf_add_unit_test(saenger_test)
+pf_add_unit_test(selection_planarity_test)
 
 # Differential tests vs the Python / x3dna oracles. These need the find_pair_2
 # reference data; registered only when present so a bare checkout still builds.

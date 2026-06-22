@@ -115,6 +115,26 @@ double severity_from_prosco_zprime(std::optional<double> prosco,
     return std::min(1.0, std::abs(*zprime) / kZprimeThreshold);
 }
 
+/// Severity plus the ProSco/Z' that produced it (kept for per-issue reporting).
+struct SevDetail {
+    double severity = 0.0;
+    std::optional<double> prosco;
+    std::optional<double> zprime;
+};
+
+/// Černý three-tier label (Černý et al. NAR 2026 gkaf1335):
+///   Preferred   = ProSco >= 5
+///   Allowed     = ProSco < 5 and |Z'| <= 5
+///   Of Concern  = ProSco < 5 and |Z'| > 5  (or Z' unavailable)
+/// Returns "" when the parameter is not ProSco/Z'-scored (e.g. hbond count,
+/// where prosco is none) — triggered issues of that kind carry an empty tier.
+std::string prosco_tier(std::optional<double> prosco, std::optional<double> zprime) {
+    if (!prosco) return "";
+    if (*prosco >= kProscoPreferred) return "Preferred";
+    if (!zprime) return "Of Concern";
+    return std::abs(*zprime) <= kZprimeThreshold ? "Allowed" : "Of Concern";
+}
+
 // ---- H-bond angle geometry (hbond_angles.py) ----
 double angle_at_atom(const Vector3d& neighbor, const Vector3d& atom, const Vector3d& partner) {
     const Vector3d v1 = neighbor - atom, v2 = partner - atom;
@@ -313,15 +333,16 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
         ++num_base;
     }
 
-    // Helper: Cerny severity for a continuous parameter.
+    // Helper: Cerny severity for a continuous parameter, plus the ProSco/Z' that
+    // produced it (kept so each triggered issue can report its tier).
     auto cerny_sev = [&](std::optional<double> val, const std::string& source,
-                         const char* param) -> double {
+                         const char* param) -> SevDetail {
         const auto ps = impl_->prosco_lookup(val, source, param, bp, lw);
         const auto zp = impl_->zprime_lookup(val, source, param, bp, lw);
-        return severity_from_prosco_zprime(ps, zp);
+        return {severity_from_prosco_zprime(ps, zp), ps, zp};
     };
 
-    std::unordered_map<std::string, double> issues;
+    std::unordered_map<std::string, SevDetail> issues;
 
     // ---- 6 pair geometry parameters, each individually ----
     const std::array<std::pair<const char*, double>, 6> pair_params = {{
@@ -333,32 +354,38 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
         {"opening",   params.opening},
     }};
     for (const auto& [param, val] : pair_params) {
-        const double s = cerny_sev(val, "pairs", param);
-        if (s > 0.0) issues[param] = s;
+        const auto d = cerny_sev(val, "pairs", param);
+        if (d.severity > 0.0) issues[param] = d;
     }
 
     // ---- H-bond distance: WC cells judge all base-base bonds; other cells
-    //      judge only the strong (primary) bond (hbond_distance_policy.py) ----
+    //      judge only the strong (primary) bond (hbond_distance_policy.py).
+    //      Keep the ProSco/Z' of the worst (max-severity) scored bond. ----
     std::vector<double> bond_distances;
     bond_distances.reserve(hbonds.size());
     for (const auto& hb : hbonds) bond_distances.push_back(hb.distance);
-    double dist_sev = 0.0;
-    for (const double d : distances_to_score(bond_distances, bp, lw))
-        dist_sev = std::max(dist_sev, cerny_sev(d, "hbonds", "distance"));
-    if (dist_sev > 0.0) issues["distance"] = dist_sev;
-
-    // ---- H-bond angles: max over donor + acceptor angles across all bonds ----
-    double angle_sev = 0.0;
-    for (const auto& hb : hbonds) {
-        angle_sev = std::max(angle_sev, cerny_sev(hb.donor_angle,    "hbonds", "donor_angle"));
-        angle_sev = std::max(angle_sev, cerny_sev(hb.acceptor_angle, "hbonds", "acceptor_angle"));
+    SevDetail dist;
+    for (const double d : distances_to_score(bond_distances, bp, lw)) {
+        const auto sd = cerny_sev(d, "hbonds", "distance");
+        if (sd.severity > dist.severity) dist = sd;
     }
-    if (angle_sev > 0.0) issues["hbond_angles"] = angle_sev;
+    if (dist.severity > 0.0) issues["distance"] = dist;
 
-    // ---- H-bond count: graded (canonical - actual) / canonical ----
+    // ---- H-bond angles: max over donor + acceptor angles across all bonds;
+    //      keep the ProSco/Z' of the worst (argmax) angle. ----
+    SevDetail ang;
+    for (const auto& hb : hbonds) {
+        const auto sd_d = cerny_sev(hb.donor_angle,    "hbonds", "donor_angle");
+        if (sd_d.severity > ang.severity) ang = sd_d;
+        const auto sd_a = cerny_sev(hb.acceptor_angle, "hbonds", "acceptor_angle");
+        if (sd_a.severity > ang.severity) ang = sd_a;
+    }
+    if (ang.severity > 0.0) issues["hbond_angles"] = ang;
+
+    // ---- H-bond count: graded (canonical - actual) / canonical (no ProSco/Z') ----
     {
         const double s = impl_->hbond_count_severity(bp, lw, num_base);
-        if (s > 0.0) issues["incorrect_hbond_count"] = s;
+        if (s > 0.0) issues["incorrect_hbond_count"] = SevDetail{s, std::nullopt, std::nullopt};
     }
 
     // Build weighted penalty list in kIssueKeys order, then sort by descending penalty.
@@ -367,8 +394,16 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
     for (const char* k : kIssueKeys) {
         const auto it = issues.find(k);
         if (it == issues.end()) continue;
-        const double w = impl_->pair_weights.at(k) * it->second;
-        weighted.push_back({k, w});
+        const SevDetail& d = it->second;
+        const double w = impl_->pair_weights.at(k) * d.severity;
+        IssuePenalty ip;
+        ip.issue = k;
+        ip.weight = w;
+        ip.severity = d.severity;
+        ip.prosco = d.prosco;
+        ip.zprime = d.zprime;
+        ip.tier = prosco_tier(d.prosco, d.zprime);
+        weighted.push_back(std::move(ip));
         penalty += w;
     }
     std::stable_sort(weighted.begin(), weighted.end(),

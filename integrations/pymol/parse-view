@@ -1,0 +1,69 @@
+\#!/usr/bin/env bash
+#
+# parse-view <pdb-id | structure-file>
+#
+# One command: open PyMOL, load the structure (a PDB id is fetched from RCSB, a
+# local .pdb/.cif is loaded directly), score it with pairfinder, and highlight
+# the problematic base pairs. The PyMOL window stays open for inspection.
+#
+#   ./parse-view 1GID
+#   ./parse-view /path/to/mymodel.pdb
+#
+# Env overrides:
+#   PYMOL=/path/to/pymol          pick a specific PyMOL executable
+#   PAIRFINDER_BINARY=/path/...    pick a specific pairfinder binary
+#   PARSE_VIEW_DRYRUN=1            print the PyMOL command block and exit
+#
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # integrations/pymol
+REPO="$(cd "$HERE/../.." && pwd)"                       # repo root
+PLUGIN="$HERE/parse_pymol.py"
+BIN="${PAIRFINDER_BINARY:-$REPO/build/pairfinder}"
+
+INPUT="${1:-}"
+if [ -z "$INPUT" ]; then
+    echo "usage: parse-view <pdb-id | structure-file>" >&2
+    exit 2
+fi
+if [ ! -x "$BIN" ]; then
+    echo "pairfinder binary not found/executable: $BIN" >&2
+    echo "build it first, or set PAIRFINDER_BINARY=/path/to/pairfinder" >&2
+    exit 1
+fi
+
+# Load a local file directly; otherwise treat the argument as a PDB id to fetch.
+# async=0 makes the load/fetch finish before parse_score runs.
+if [ -f "$INPUT" ]; then
+    LOADCMD="load $INPUT, target"
+else
+    LOADCMD="fetch $INPUT, target, async=0"
+fi
+
+read -r -d '' CMDS <<EOF || true
+run $PLUGIN
+parse_set_binary $BIN
+$LOADCMD
+parse_score target, 0, 1
+EOF
+
+if [ "${PARSE_VIEW_DRYRUN:-}" = "1" ]; then
+    printf 'PyMOL commands:\n%s\n' "$CMDS"
+    exit 0
+fi
+
+# Locate a PyMOL executable.
+PYMOL="${PYMOL:-}"
+if [ -z "$PYMOL" ]; then
+    for cand in pymol /Applications/PyMOL.app/Contents/MacOS/PyMOL \
+                "$HOME/miniconda3/bin/pymol" "$HOME/anaconda3/bin/pymol"; do
+        if command -v "$cand" >/dev/null 2>&1; then PYMOL="$cand"; break; fi
+        if [ -x "$cand" ]; then PYMOL="$cand"; break; fi
+    done
+fi
+if [ -z "$PYMOL" ]; then
+    echo "PyMOL not found on PATH; set PYMOL=/path/to/pymol" >&2
+    exit 1
+fi
+
+exec "$PYMOL" -d "$CMDS"

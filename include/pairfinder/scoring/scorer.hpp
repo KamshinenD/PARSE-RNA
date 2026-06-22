@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,9 +30,15 @@ namespace classification = pairfinder::algorithms::classification;
 namespace hbond = pairfinder::algorithms::hbond;
 
 /// One triggered issue and its weighted penalty contribution (weight × severity).
+/// The Černý three-tier provenance (ProSco / Z' / tier) is carried for reporting
+/// and downstream highlighting (e.g. PyMOL); it does not affect the score.
 struct IssuePenalty {
     std::string issue;
-    double weight = 0.0;  ///< pair_weight[issue] × severity
+    double weight = 0.0;            ///< pair_weight[issue] × severity
+    double severity = 0.0;          ///< Černý severity in [0,1]
+    std::optional<double> prosco;   ///< ProSco of the worst contributing value (none if N/A)
+    std::optional<double> zprime;   ///< Z' of the worst contributing value (none if N/A)
+    std::string tier;               ///< "Preferred"/"Allowed"/"Of Concern"; "" if not ProSco-scored
 };
 
 /// Per-pair scoring result.
