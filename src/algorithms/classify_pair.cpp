@@ -168,8 +168,20 @@ ClassifiedPair classify_pair(const core::ReferenceFrame& frame1,
             const bool cww0 = classes[0] == "cWW", cww1 = classes[1] == "cWW";
             const bool any_none = !rmsds[0] || !rmsds[1];
             if ((cww0 || cww1) && any_none) {
-                out.lw_class = "cWW";
-                out.template_rmsd = rmsds[cww0 ? 0 : 1];
+                const int cww_idx = cww0 ? 0 : 1;
+                const int alt_idx = 1 - cww_idx;
+                // If cWW's OWN template is missing but the alternative has a
+                // good fit, commit the verifiable class instead of a cWW we
+                // can't support. Threshold swept on the unique set (peaks 1.5).
+                constexpr double kAltCommitRmsd = 1.5;
+                if (!rmsds[cww_idx] && rmsds[alt_idx] &&
+                    *rmsds[alt_idx] < kAltCommitRmsd) {
+                    out.lw_class = classes[alt_idx];
+                    out.template_rmsd = rmsds[alt_idx];
+                } else {
+                    out.lw_class = "cWW";
+                    out.template_rmsd = rmsds[cww_idx];
+                }
             } else {
                 out.lw_class = lw;  // keep pipe form
                 out.template_rmsd = rmsds[0];
