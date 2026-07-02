@@ -368,10 +368,12 @@ int main(int argc, char** argv) {
         std::cout << "parse " << kVersion << "\n"
                   << "usage:\n"
                   << "  parse <pdb-id | structure-file> [options]\n"
-                  << "      find + classify + score -> JSON (stdout or --out FILE)\n"
+                  << "      find + classify + score -> JSON (stdout, or a file with --out)\n"
                   << "      a bare PDB id (e.g. 6V3A) is downloaded from RCSB and cached;\n"
                   << "      an existing .cif/.pdb(.gz) path is used directly.\n"
-                  << "  options: --out FILE  --details  --no-score  --no-download  --cache-dir DIR\n"
+                  << "  --out [FILE]  write JSON to a file; bare --out -> pairs/<id>.json,\n"
+                  << "                a bare name -> pairs/<name>, a path is used as given\n"
+                  << "  options: --details  --no-score  --no-download  --cache-dir DIR\n"
                   << "  cache:   $PARSE_CACHE_DIR or ~/.cache/parse\n"
                   << "  parse dump-parse <input.pdb>   # parsed atoms (TSV)\n";
         return args.empty() ? 1 : 0;
@@ -401,6 +403,7 @@ int main(int argc, char** argv) {
     // from RCSB (cached) unless an existing file path is given.
     const std::string input = args[0];
     bool score = true, details = false, allow_download = true, emit_classified = false;
+    bool out_requested = false;
     std::string out_path, cache_override;
     for (std::size_t i = 1; i < args.size(); ++i) {
         if (args[i] == "--no-score") score = false;
@@ -408,13 +411,22 @@ int main(int argc, char** argv) {
         else if (args[i] == "--details") details = true;
         else if (args[i] == "--classified") emit_classified = true;
         else if (args[i] == "--no-download") allow_download = false;
-        else if (args[i] == "--out" && i + 1 < args.size()) out_path = args[++i];
+        else if (args[i] == "--out") {
+            // Optional value: `--out name.json` uses that name; a bare `--out`
+            // (nothing, or followed by another flag) defaults to <pdb_id>.json.
+            out_requested = true;
+            if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-')
+                out_path = args[++i];
+        }
         else if (args[i] == "--cache-dir" && i + 1 < args.size()) cache_override = args[++i];
         else { std::cerr << "unknown option: " << args[i] << "\n"; return 1; }
     }
     try {
         const std::filesystem::path file =
             resolve_input(input, cache_dir(cache_override), allow_download);
+        // `--out` with no name defaults to <pdb_id>.json (routed into pairs/).
+        if (out_requested && out_path.empty())
+            out_path = clean_pdb_id(file.string()) + ".json";
         return find_json(file.string(), score, details, emit_classified, out_path);
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";

@@ -81,14 +81,16 @@ The basic form is `parse <input> [options]`, where `<input>` is either a
 # by PDB ID (downloaded + cached under ~/.cache/parse)
 parse 1EHZ
 
-# write the JSON to a file (see output rules below)
-parse 1EHZ --out 1EHZ.json
+# save to a file — bare --out uses the PDB id → pairs/1EHZ.json
+parse 1EHZ --out
 
-# from a local file (no download)
-parse path/to/structure.cif --out structure.json
+# from a local file (no download) — just the name if it's in the current
+# folder, or its path if it's elsewhere
+parse mymodel.cif --out              # file in the current directory
+parse path/to/mymodel.cif --out      # file in another directory
 
 # a full ribosome — still sub-second
-parse 7K00 --out 7K00.json
+parse 7K00 --out
 ```
 
 ### Where the output goes
@@ -96,7 +98,8 @@ parse 7K00 --out 7K00.json
 | you run | JSON goes to |
 |---|---|
 | no `--out` | **stdout** (redirect with `> file.json` if you like) |
-| `--out name.json` (bare filename) | **`pairs/name.json`** — collected in a `pairs/` folder (created automatically) |
+| `--out` (no name) | **`pairs/<PDB_id>.json`** — e.g. `parse 1GID --out` → `pairs/1GID.json` (folder auto-created) |
+| `--out name.json` (bare name) | **`pairs/name.json`** |
 | `--out path/to/name.json` (has a directory) | exactly that path (created if needed) |
 
 Downloaded structures are cached in **`~/.cache/parse/`** — nothing is
@@ -106,7 +109,7 @@ written into your working directory unless you ask for it.
 
 | Option | Effect |
 |---|---|
-| `--out FILE` | write JSON to `FILE` (bare name → `pairs/`; default: stdout) |
+| `--out [FILE]` | write JSON to a file (default: stdout). Bare `--out` → `pairs/<PDB_id>.json`; a bare name → `pairs/<name>`; a path is used as given |
 | `--details` | include extra per-pair fields (template RMSD, score breakdown) |
 | `--no-score` | find + classify only, skip quality scoring |
 | `--no-download` | never fetch from RCSB; only use a local file |
