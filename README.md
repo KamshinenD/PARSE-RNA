@@ -31,8 +31,8 @@ scoring data) or fetched automatically by CMake (GEMMI). There is nothing to
 
 ```bash
 # 1. clone
-git clone https://github.com/KamshinenD/pair-finder-cpp.git
-cd pair-finder-cpp
+git clone https://github.com/KamshinenD/PARSE-RNA.git
+cd PARSE-RNA
 
 # 2. configure (Release = optimized)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
