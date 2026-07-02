@@ -13,7 +13,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(PAIRFINDER_BUILD_TESTS "Build unit tests" ON)
 option(PAIRFINDER_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 
 # ---- Core library -----------------------------------------------------------
@@ -113,8 +112,4 @@ install(TARGETS pairfinder RUNTIME DESTINATION bin)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources/"
     DESTINATION share/pairfinder/resources)
 
-# ---- Tests ------------------------------------------------------------------
-if(PAIRFINDER_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
-endif()
+# Unit tests are developer-only and are not part of this package.

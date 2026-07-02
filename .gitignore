@@ -28,3 +28,16 @@ __pycache__/
 *.pyo
 tests/differential/
 PORT_DEVIATIONS.md
+
+# ---- CLI/PyMOL output ----
+/pairs/
+*.pse
+*.cif
+
+# ---- dev-only tooling (not shipped to PI) ----
+/tools/
+integrations/pymol/view_ideals.py
+integrations/pymol/view-ideals
+integrations/pymol/view-ideals-new
+resources/basepair-idealized_new/
+/tests/

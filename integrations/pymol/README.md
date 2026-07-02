@@ -79,12 +79,17 @@ never modified.
 |---|---|
 | `parse_score [obj], [min_severity], [zoom]` | score + highlight all flagged pairs |
 | `parse_list [n]` | print the ranked worklist (default 25) |
+| `parse_dump [path]` | write the current scored pairs (incl. edits) to JSON — default `<obj>_pairs.json` |
+| `parse_load <path>` | rebuild the worklist from a `parse_dump` JSON — **no binary, no re-scoring** (for sharing a session) |
 | `parse_next` / `parse_prev` | step through the worklist one pair at a time |
-| `parse_goto <rank \| res-id>` | jump to a worklist entry (e.g. `parse_goto 12` or `parse_goto 1A-G-169`) |
+| `parse_overview` | zoom back out to the whole-structure overview (undim + re-show all flagged pairs) |
+| `parse_goto <rank \| chain+number>` | jump to worklist entry `12`, **or** inspect any residue by `A-169` / `A169` / `A-G-169` — including a clean pair not in the worklist, printing its score + what's out of range |
 | `parse_info [selection]` | inspect a clicked/selected residue → jump the worklist to its pair |
+| `parse_ideal [on\|off]` | overlay the **idealized** version of the current pair (green ghost = target geometry) so a refiner sees how to fix it; sticky toggle, default off |
 | `parse_keys [on\|off]` | bind/unbind the navigation keys |
 | `parse_clear` | remove every overlay + reset |
 | `parse_set_binary <path>` | set the pairfinder binary path |
+| `parse_set_ideals <path>` | set the idealized-template dir (default `resources/basepair-idealized`) |
 
 ## Guided navigation (keys, on-screen status, click-to-inspect)
 
@@ -111,6 +116,7 @@ parse_score target      # build the queue + global map
 parse_next              # frame the worst pair: bright sticks, faded 8 A context,
                         #   H-bonds, a label, and its distortion printed to the log
 parse_next              # ... the next one, and so on
+parse_overview          # zoom back out to the whole structure (undim, all pairs shown)
 parse_goto 1A-G-169     # jump straight to a specific pair
 ```
 
@@ -121,9 +127,65 @@ parameters (e.g. `shear Z'=+11.3, opening Z'=+10.3` — which tells you *how* it
 distorted) plus a **Phenix-style selection string** for the pair.
 
 The queue is ranked by each pair's **single most-deviant parameter's |Z′|** (the
-ProSco-gated Černý severity, *uncapped* so a 6.6σ pair outranks a 5.1σ one) — never
-by the 0–100 quality score, which is intentionally absent from all output. Each
-entry's headline is that worst parameter, e.g. `propeller 6.2σ`.
+ProSco-gated Černý severity, *uncapped* so a 6.6σ pair outranks a 5.1σ one) — not
+by the 0–100 quality score, which saturates near 100 for most pairs and so makes a
+poor rank key. Each entry shows **both**: the pair's score (e.g. `score 65/100`)
+*and* its worst parameter (e.g. `propeller 6.2σ`). `parse_overview` additionally
+prints the whole-structure score (overall / pairs / backbone).
+
+**Visual priority:** the worklist is a *visual* triage tool, so `hbond_angles` —
+a bond-geometry (chemistry) strain that doesn't make a pair *look* distorted — is
+down-weighted (×0.3) in the rank and highlight color. A visibly twisted/splayed
+pair therefore outranks one whose only large deviation is H-bond angle, and the
+headline names the *visible* defect. The true σ is still reported, and H-bond
+*distance* keeps full weight (a long/short bond shows as a visibly splayed pair).
+This affects only the PyMOL triage order/color — never the 0–100 score or scorer.
 
 Typical loop: `parse_next` to a problem → understand it → fix it in Phenix / edit the
 coordinates → reload and re-run `parse_score` → the fixed pair drops off the queue.
+
+## Show the ideal pair (what it should look like)
+
+Knowing a pair is distorted is half the job; a refiner also needs to see the
+*target*. `parse_ideal` overlays the **idealized** version of the current pair —
+a perfectly planar, H-bond-optimized template for that Leontis–Westhof class and
+sequence — as a thin **green ghost** with its ideal H-bonds:
+
+```
+parse_next
+parse_ideal            # green ghost of the ideal pair appears, fitted on the real one
+parse_ideal on         # ... and stays on for every parse_next / parse_goto
+parse_ideal off        # hide it again
+```
+
+The ideal is **best-fit** onto the actual pair (least-squares over the shared base
+atoms of *both* bases), so each base shows how far it sits from where it should be
+— flatten/untwist the real (colored) sticks toward the green ghost. Templates live
+in `resources/basepair-idealized/<class>/<seq>.pdb`; point elsewhere with
+`parse_set_ideals <dir>` or the `PARSE_IDEALS_DIR` env var. It's a sticky toggle,
+**off by default** (so the view stays clean until you ask for the target). If no
+template exists for a pair's class+sequence, it says so and shows nothing.
+
+## Share a scored session (colleague navigates with no binary)
+
+A `.pse` saves the *picture* but not the plugin or the worklist, so a colleague
+can't navigate from it alone. To let someone step through a scored structure
+**without the `pairfinder` binary and without re-scoring**, send three files:
+
+1. `1y26.pse`        — the session (`save 1y26.pse` after scoring)
+2. `1y26_pairs.json` — the worklist (`parse_dump`)
+3. `parse_pymol.py`  — the plugin
+
+They then run, in PyMOL:
+
+```
+load 1y26.pse           # the structure + highlights
+run parse_pymol.py      # registers the parse_* commands
+parse_load 1y26_pairs.json   # rebuilds the worklist from the JSON (no binary)
+parse_next              # ... and they can step through exactly as you did
+```
+
+`parse_load` reconstructs the queue from the dumped JSON, so `parse_next` / `parse_prev`
+/ `parse_list` / `parse_overview` / `parse_dump` all work. Only `parse_score` itself
+(scoring a *new* model) needs the binary. Tip: put those three lines in a `view.pml`
+so they only have to type `@view.pml`.

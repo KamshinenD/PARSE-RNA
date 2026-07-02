@@ -1,4 +1,4 @@
-\#!/usr/bin/env bash
+#!/usr/bin/env bash
 #
 # parse-view <pdb-id | structure-file>
 #
@@ -33,18 +33,34 @@ if [ ! -x "$BIN" ]; then
 fi
 
 # Load a local file directly; otherwise treat the argument as a PDB id to fetch.
+# Name the object after the structure (PDB id, or local file stem) so downstream
+# commands (e.g. parse_dump -> <obj>_pairs.json) carry the real name, not "target".
 # async=0 makes the load/fetch finish before parse_score runs.
 if [ -f "$INPUT" ]; then
-    LOADCMD="load $INPUT, target"
+    OBJ="$(basename "${INPUT%.*}")"; KIND=file
 else
-    LOADCMD="fetch $INPUT, target, async=0"
+    OBJ="$INPUT"; KIND=id
+fi
+# PyMOL object names must be simple tokens; sanitize before using the name.
+OBJ="$(printf '%s' "$OBJ" | tr -c 'A-Za-z0-9_-' '_')"
+# Cache fetched structures in the pairfinder cache (~/.cache/pairfinder, or
+# $PAIRFINDER_CACHE_DIR) instead of the current directory, so `fetch` never
+# drops a .cif into the working folder.
+CACHE="${PAIRFINDER_CACHE_DIR:-$HOME/.cache/pairfinder}"
+mkdir -p "$CACHE"
+if [ "$KIND" = file ]; then
+    LOADCMD="load $INPUT, $OBJ"
+else
+    LOADCMD="fetch $INPUT, $OBJ, async=0"
 fi
 
 read -r -d '' CMDS <<EOF || true
 run $PLUGIN
 parse_set_binary $BIN
+set fetch_path, $CACHE
 $LOADCMD
-parse_score target, 0, 1
+parse_score $OBJ, 0, 1
+parse_dump
 EOF
 
 if [ "${PARSE_VIEW_DRYRUN:-}" = "1" ]; then

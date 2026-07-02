@@ -679,7 +679,29 @@ GeoResult classify_by_geometry(const ReferenceFrame& f1, const ReferenceFrame& f
         char af2 = alt_face2 != 0 ? alt_face2 : face2;
         LwResult canon_alt = canonicalize_lw(orientation, af1, af2);
         if (canon_alt.lw_class == out.lw_class) {
-            out.uncertain = false;
+            // Both-flip lands on the SAME canonical class. Historically treated
+            // as a mere residue swap and committed. But when BOTH residues are
+            // independently boundary-uncertain (we only reach here when a
+            // centroid margin is below the ambiguity threshold), the genuine
+            // ambiguity is a SINGLE-face flip (e.g. cWH vs cWW/cHH), which the
+            // both-flip alt cannot express. Flip only the less-confident residue.
+            if (alt_face1 != 0 && alt_face2 != 0) {
+                const double m1 = std::abs(dotget(d1.dots, face1, 0.0) -
+                                           dotget(d1.dots, alt_face1, 0.0));
+                const double m2 = std::abs(dotget(d2.dots, face2, 0.0) -
+                                           dotget(d2.dots, alt_face2, 0.0));
+                LwResult single = (m1 <= m2)
+                    ? canonicalize_lw(orientation, alt_face1, face2)
+                    : canonicalize_lw(orientation, face1, alt_face2);
+                if (single.lw_class != out.lw_class) {
+                    out.alt_class = single.lw_class;
+                    out.alt_swapped = single.swapped;
+                } else {
+                    out.uncertain = false;
+                }
+            } else {
+                out.uncertain = false;
+            }
         } else if (canon_alt.swapped != out.swapped &&
                    (out.lw_class.find('S') != std::string::npos ||
                     canon_alt.lw_class.find('S') != std::string::npos)) {

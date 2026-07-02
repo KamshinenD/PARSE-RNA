@@ -253,7 +253,16 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
     if (out_path.empty()) {
         std::cout << text << '\n';
     } else {
-        std::ofstream(out_path) << text << '\n';
+        // A bare filename (no directory) is collected under ./pairs/ so output
+        // stays in one folder rather than the working directory. An explicit
+        // path (relative-with-dir or absolute) is respected as given.
+        std::filesystem::path outp(out_path);
+        if (!outp.has_parent_path()) outp = std::filesystem::path("pairs") / outp;
+        std::error_code out_ec;
+        if (outp.has_parent_path())
+            std::filesystem::create_directories(outp.parent_path(), out_ec);
+        std::ofstream(outp) << text << '\n';
+        std::fprintf(stderr, "Wrote %s\n", outp.string().c_str());
     }
     lap("json build + output");
     return 0;

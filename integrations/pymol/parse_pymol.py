@@ -28,6 +28,7 @@ reported in the summary only, not colored.
 """
 import json
 import os
+import re
 import shutil
 import string
 import subprocess
@@ -63,6 +64,11 @@ def residue_selection(res_id):
     return f"({chain_tok}resi {resi})"
 
 
+#: base ring + functional atoms — used to hide the cartoon "ladder" only where the
+#: base is already drawn another way (focus sticks / context lines).
+_BASE_ATOMS_SEL = "name N1+C2+N3+C4+C5+C6+N7+C8+N9+N6+O6+N2+O2+N4+O4"
+
+
 def colored_issues(issue_details):
     """ProSco/Z'-scored issues only (drops summary-only ones like hbond count)."""
     return [d for d in (issue_details or []) if d.get("issue") not in SUMMARY_ONLY]
@@ -71,21 +77,36 @@ def colored_issues(issue_details):
 _ZPRIME_THRESHOLD = 5.0    # Cerny: |Z'| = 5 is the Allowed/Of-Concern boundary
 _PROSCO_PREFERRED = 5.0    # Cerny: ProSco >= 5 is Preferred (not flagged)
 
+#: Visualization-only down-weighting of issues that are NOT visibly obvious.
+#: `hbond_angles` is a bond-geometry (chemistry) defect, not a shape defect -- a
+#: pair can sit perfectly flat and well-twisted yet have strained H-bond angles,
+#: so a high hbond_angles |Z'| would otherwise rocket a normal-looking pair to the
+#: top of the worklist (and color it bright red). Multiplying its severity by < 1
+#: keeps it flagged and reported with its TRUE sigma, but lets the visibly-
+#: distorted pairs (propeller, opening, plane angle, shear, ...) dominate the
+#: triage order. Affects ONLY the PyMOL worklist rank + highlight color -- not the
+#: 0-100 score, the scorer, or any benchmark. (H-bond *distance* keeps full weight:
+#: a long/short bond shows up as a visibly splayed pair.)
+VISUAL_WEIGHT = {"hbond_angles": 0.3}
+
 
 def rank_severity(detail):
-    """Unclamped Cerny severity of one parameter, for ranking: |Z'| / 5.
+    """Unclamped, visually-weighted Cerny severity of one parameter, for ranking.
 
-    Mirrors the scorer's `min(1, |Z'|/5)` (when ProSco < 5) but WITHOUT the cap,
-    so pairs don't all saturate to 1.0 -- a 6.6-sigma deviation outranks a
-    5.1-sigma one. ProSco gates whether the parameter counts at all; |Z'| is the
-    continuous magnitude. Returns 0 for Preferred parameters (ProSco >= 5).
+    Base severity is |Z'| / 5 -- mirrors the scorer's `min(1, |Z'|/5)` (when
+    ProSco < 5) but WITHOUT the cap, so pairs don't all saturate to 1.0 (a
+    6.6-sigma deviation outranks a 5.1-sigma one). ProSco gates whether the
+    parameter counts at all; |Z'| is the continuous magnitude. The result is then
+    scaled by VISUAL_WEIGHT so non-shape issues (hbond_angles) rank/color lower.
+    Returns 0 for Preferred parameters (ProSco >= 5).
     """
     ps, zp = detail.get("prosco"), detail.get("zprime")
     if ps is None or ps >= _PROSCO_PREFERRED:
         return 0.0
+    w = VISUAL_WEIGHT.get(detail.get("issue"), 1.0)
     if zp is None:
-        return 1.0   # outside the distribution, no Z' magnitude available
-    return abs(zp) / _ZPRIME_THRESHOLD
+        return w     # outside the distribution, no Z' magnitude available
+    return w * abs(zp) / _ZPRIME_THRESHOLD
 
 
 def worst_parameter(issue_details):
@@ -122,6 +143,12 @@ def severity_headline(f):
     return f"{issue} {abs(z):.1f}σ" if z is not None else f"{issue} (no Z')"
 
 
+def pair_score_str(f):
+    """The pair's 0-100 PARSE quality score, or '?' when unavailable."""
+    s = f.get("score")
+    return f"{s:.0f}" if s is not None else "?"
+
+
 def flagged_pairs(data, min_severity=0.0):
     """Pairs with a colorable issue, ranked worst-first by unclamped |Z'|.
 
@@ -147,7 +174,7 @@ def flagged_pairs(data, min_severity=0.0):
             "lw_class": (p.get("classification") or {}).get("lw_class"),
             "rank": rank, "sev": clamped,
             "worst_issue": w.get("issue"), "worst_z": w.get("zprime"),
-            "tier": w.get("tier", ""),
+            "tier": w.get("tier", ""), "score": p.get("score"),
             "issue": w.get("issue"), "details": p.get("issue_details", []),
         })
     out.sort(key=lambda r: -r["rank"])
@@ -201,13 +228,41 @@ _PROBLEMS = "parse_problems"
 _FOCUS = "parse_focus"        # worklist: the current pair (bright sticks)
 _CONTEXT = "parse_context"    # worklist: residues within a few A (faded lines)
 _HB = "parse_hb"              # worklist: polar contacts within the current pair
+_IDEAL = "parse_ideal_pair"   # ghost of the idealized pair, best-fit onto the focus
+_IDEAL_HB = "parse_ideal_hb"  # the idealized pair's optimized H-bonds
 _TMP_OBJ = "_parse_tmp"
 
 #: worklist state set by parse_score, walked by parse_next / parse_prev / parse_goto
 _QUEUE = []          # flagged pairs, ordered chain-grouped then worst-first
 _POS = -1            # index of the current pair in _QUEUE (-1 = not started)
 _SCORED_OBJ = None   # object the queue was built against
+_STRUCT_SCORE = None # whole-structure scores from the last parse_score
+_SCORED_DATA = None  # full scored JSON from the last parse_score (for parse_dump)
+_SHOW_IDEAL = False  # sticky toggle: overlay the idealized pair on each focus
+_LAST_FOCUS = None   # last pair-view rendered (so parse_ideal can act on it)
 _CONTEXT_RADIUS = 8.0
+
+
+def _plugin_dir():
+    """Directory of this plugin file.
+
+    PyMOL `run`s the script inside the `pymol` module namespace, so globals()
+    __file__ points at PyMOL itself; PyMOL instead sets __script__ to this file.
+    A plain import sets a correct __file__. Prefer whichever actually names this
+    plugin; fall back to the cwd.
+    """
+    for var in ("__script__", "__file__"):
+        p = globals().get(var)
+        if p and "parse_pymol" in os.path.basename(p):
+            return os.path.dirname(os.path.abspath(p))
+    return os.getcwd()
+
+
+#: idealized base-pair templates: <_IDEALS_DIR>/<lw_class>/<seq>.pdb. Defaults to
+#: the repo's resources dir next to this plugin; override with PARSE_IDEALS_DIR or
+#: the parse_set_ideals command.
+_IDEALS_DIR = os.path.normpath(os.environ.get("PARSE_IDEALS_DIR") or os.path.join(
+    _plugin_dir(), "..", "..", "resources", "basepair-idealized"))
 #: single-char labels used to rename nucleotide chains before a legacy-PDB save
 #: (A-Z, a-z, 0-9 = 62). Legacy PDB has a 1-char chain column and a 99999-atom
 #: serial limit, so a big multi-char-chain structure (e.g. a ribosome with chain
@@ -288,6 +343,7 @@ def _score_object(cmd, obj):
         for p in data.get("pairs", []):
             p["res_id1"] = _backmap_chain(p["res_id1"], inv)
             p["res_id2"] = _backmap_chain(p["res_id2"], inv)
+    data["pdb_id"] = obj   # the object's real name, not the scratch temp file
     return data
 
 
@@ -304,8 +360,9 @@ def parse_clear(_self=None):
     global _QUEUE, _POS, _SCORED_OBJ
     if _SCORED_OBJ is not None:
         cmd.set("cartoon_transparency", 0.0, _SCORED_OBJ)
+        cmd.show("cartoon", f"({_SCORED_OBJ}) and ({_BASE_ATOMS_SEL})")  # restore ladder
         _set_hud(cmd, "")
-    for o in (_OVERLAY, _PROBLEMS, _FOCUS, _CONTEXT, _HB):
+    for o in (_OVERLAY, _PROBLEMS, _FOCUS, _CONTEXT, _HB, _IDEAL, _IDEAL_HB):
         cmd.delete(o)
     _QUEUE, _POS, _SCORED_OBJ = [], -1, None
     print("PARSE: cleared")
@@ -342,7 +399,7 @@ def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=Non
     print(format_summary(data, flagged, hbcount, obj))
 
     # Reset any previous worklist focus, then build a fresh queue for this run.
-    global _QUEUE, _POS, _SCORED_OBJ
+    global _QUEUE, _POS, _SCORED_OBJ, _STRUCT_SCORE, _SCORED_DATA
     cmd.delete(_FOCUS)
     cmd.delete(_CONTEXT)
     cmd.delete(_HB)
@@ -350,6 +407,13 @@ def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=Non
     _QUEUE = build_queue(flagged)
     _POS = -1
     _SCORED_OBJ = obj
+    _SCORED_DATA = data                    # full JSON, written out by parse_dump
+    _STRUCT_SCORE = {                       # whole-RNA scores, shown by parse_overview
+        "overall":  data.get("overall_score"),
+        "pairs":    data.get("pairs_score"),
+        "residues": data.get("residues_score"),
+        "n_pairs":  data.get("n_pairs"),
+    }
 
     # Gray the whole structure so Preferred geometry recedes and the flagged
     # pairs (colored sticks, built below) stand out. Color only, not coordinates.
@@ -454,11 +518,24 @@ def phenix_selection(f):
 
 
 def _focus(cmd, idx, dim=1):
-    """Frame queue[idx]: bright pair + faded local context, H-bonds, label."""
+    """Frame worklist queue[idx] and move the worklist cursor there."""
     global _POS
     _POS = idx
-    f = _QUEUE[idx]
+    _render_focus(cmd, _QUEUE[idx], dim=dim, pos=idx + 1, total=len(_QUEUE))
+
+
+def _render_focus(cmd, f, dim=1, pos=None, total=None):
+    """Frame one pair-view dict `f`: bright pair + faded context, H-bonds, label.
+
+    `f` is a flagged_pairs-style dict (use _pair_view for a clean pair). With
+    `pos`/`total` it's a worklist stop ('[3/45]'); without them it's an ad-hoc
+    residue lookup (parse_goto A-169) and the worklist cursor is left untouched.
+    A pair with nothing out of range is drawn green and reported as in-range.
+    """
+    global _LAST_FOCUS
+    _LAST_FOCUS = f
     obj = _SCORED_OBJ
+    flagged = f.get("worst_issue") is not None
     s1, s2 = residue_selection(f["res_id1"]), residue_selection(f["res_id2"])
     pair_sel = f"({obj}) and ({s1} or {s2})"
 
@@ -471,12 +548,12 @@ def _focus(cmd, idx, dim=1):
     if int(dim):
         cmd.set("cartoon_transparency", 0.85, obj)
 
-    # The pair itself: bright severity-colored sticks.
+    # The pair itself: bright sticks — severity-colored if flagged, green if clean.
     cmd.create(_FOCUS, pair_sel)
     cmd.hide("everything", _FOCUS)
     cmd.show("sticks", _FOCUS)
     cmd.set("stick_radius", 0.25, _FOCUS)
-    cmd.set_color("parse_focus_col", severity_to_rgb(f["sev"]))
+    cmd.set_color("parse_focus_col", severity_to_rgb(f["sev"]) if flagged else [0.35, 0.78, 0.35])
     cmd.color("parse_focus_col", _FOCUS)
 
     # Local context: nearby residues as thin gray lines (what's crowding it).
@@ -486,31 +563,143 @@ def _focus(cmd, idx, dim=1):
     cmd.show("lines", _CONTEXT)
     cmd.color("gray50", _CONTEXT)
 
+    # Drop the cartoon base "ladder" ONLY where the base is already drawn (focus
+    # sticks + context lines) -- it's redundant there. Reset first (re-show all
+    # base cartoon), then hide it for this focus+context region; residues outside
+    # the context keep their ladder as their only base representation. The
+    # backbone cartoon is untouched, so the trace stays continuous.
+    cmd.show("cartoon", f"({obj}) and ({_BASE_ATOMS_SEL})")
+    region = (f"({obj}) and ({_BASE_ATOMS_SEL}) and ({s1} or {s2} or "
+              f"byres (({obj}) within {_CONTEXT_RADIUS} of ({pair_sel})))")
+    cmd.hide("cartoon", region)
+
     # Polar contacts within the pair (a stand-in for its H-bonds).
     cmd.distance(_HB, _FOCUS, _FOCUS, mode=2)
     cmd.hide("labels", _HB)
 
-    # One label on the pair: rank, pair, class, and worst-parameter severity.
-    label = (f"#{idx + 1} {pair_label(f)} "
+    # One label on the pair: position tag, pair, class, score, and status.
+    tag = f"#{pos} " if pos else ""
+    headline = severity_headline(f) if flagged else "in range"
+    label = (f"{tag}{pair_label(f)} "
              f"{f.get('lw_class') or '?'} {f.get('sequence') or ''} "
-             f"— {severity_headline(f)}")
+             f"— score {pair_score_str(f)}/100 ({headline})")
     cmd.label(f"{_FOCUS} and {s1} and name C1'", repr(label))
 
     cmd.zoom(_FOCUS, 5)
 
-    # Console: worst-parameter headline + full breakdown + Phenix selection.
-    n = len(_QUEUE)
-    print(f"PARSE [{idx + 1}/{n}] {pair_label(f)}  "
+    # Console: score + which parameters are out of range (or that none are).
+    where = f"[{pos}/{total}]" if pos else "(lookup)"
+    tier = f.get("tier") or ("Preferred" if not flagged else "")
+    status = f"worst: {severity_headline(f)}" if flagged else "all parameters in range"
+    print(f"PARSE {where} {pair_label(f)}  "
           f"{f.get('lw_class') or '?'} {f.get('sequence') or ''}  "
-          f"worst: {severity_headline(f)}  ({f['tier']})")
-    print(f"  distortion: {failing_params(f['details']) or '(none colored)'}")
-    print(f"  phenix:     {phenix_selection(f)}")
+          f"score {pair_score_str(f)}/100  {status}  ({tier})")
+    if flagged:
+        print(f"  out of range: {failing_params(f['details']) or '(none colored)'}")
+    else:
+        print("  out of range: none — every parameter is within Preferred range")
+    # Phenix selection hidden for now (re-enable when needed):
+    # print(f"  phenix:     {phenix_selection(f)}")
 
     # On-screen HUD (viewport title): always-visible position + current pair.
-    _set_hud(cmd, f"PARSE {idx + 1}/{n}  {pair_label(f)}  "
+    where_hud = f"{pos}/{total}" if pos else "lookup"
+    hud_status = f"{severity_headline(f)} [{tier}]" if flagged else f"in range [{tier}]"
+    _set_hud(cmd, f"PARSE {where_hud}  {pair_label(f)}  "
                   f"{f.get('lw_class') or '?'} {f.get('sequence') or ''}  "
-                  f"{severity_headline(f)} [{f['tier']}]   "
+                  f"score {pair_score_str(f)}/100  {hud_status}   "
                   f"(→ next  ← prev  Ctrl-I = inspect click)")
+
+    # Idealized-pair ghost (target geometry), only while the sticky toggle is on.
+    if _SHOW_IDEAL:
+        if not _overlay_ideal(cmd, f):
+            print(f"  ideal: no template for {f.get('lw_class')} {f.get('sequence')}")
+    else:
+        _clear_ideal(cmd)
+
+
+def _ideal_template_path(f):
+    """Path to the idealized-pair PDB for pair-view `f`, or None if absent.
+
+    Templates live at <_IDEALS_DIR>/<lw_class>/<seq>.pdb (e.g. cWW/GC.pdb). The
+    first class of an ambiguous label is used; sequence is taken from the dump.
+    """
+    lw = (f.get("lw_class") or "").split("|")[0].strip()
+    seq = (f.get("sequence") or "").strip()
+    if not lw or not seq:
+        return None
+    # Try the sequence as-is, then reversed: symmetric classes (cWW, tWW, ...) are
+    # stored under one canonical order, so a G·C pair must fall back to CG.pdb.
+    for s in (seq, seq[::-1]):
+        path = os.path.join(_IDEALS_DIR, lw, f"{s}.pdb")
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _clear_ideal(cmd):
+    """Remove the idealized-pair ghost objects (idempotent)."""
+    cmd.delete(_IDEAL)
+    cmd.delete(_IDEAL_HB)
+
+
+def _fit_pairs(cmd, ideal_res_sel, actual_res_sel):
+    """Alternating (ideal, actual) per-atom selections for pair_fit.
+
+    One pair per atom name present in BOTH residues, so pair_fit superposes
+    least-squares over the shared base atoms (ideal is the mobile object).
+    """
+    ni = {a.name for a in cmd.get_model(ideal_res_sel).atom}
+    na = {a.name for a in cmd.get_model(actual_res_sel).atom}
+    pairs = []
+    for nm in sorted(ni & na):
+        pairs.append(f"({ideal_res_sel}) and name {nm}")
+        pairs.append(f"({actual_res_sel}) and name {nm}")
+    return pairs
+
+
+def _overlay_ideal(cmd, f):
+    """Best-fit the idealized pair for `f` onto the actual pair; draw it green.
+
+    Returns True if drawn, False if there's no template or too few shared atoms
+    for a stable fit. The fit is least-squares over every atom name shared by
+    ideal & actual in BOTH residues, so both bases show their deviation.
+    """
+    _clear_ideal(cmd)
+    path = _ideal_template_path(f)
+    if path is None or _SCORED_OBJ is None:
+        return False
+    obj = _SCORED_OBJ
+    cmd.load(path, _IDEAL, zoom=0)            # zoom=0: don't fly the camera to the
+                                             # template's origin coords before we fit
+    # Match each actual residue to the ideal chain of the SAME base by shared atom
+    # count -- handles templates stored in the reverse sequence order (GC<->CG),
+    # where ideal chain A is the partner of res_id1, not res_id1 itself.
+    a1 = f"({obj}) and {residue_selection(f['res_id1'])}"
+    a2 = f"({obj}) and {residue_selection(f['res_id2'])}"
+    iA = f"({_IDEAL}) and chain A and resi 1"
+    iB = f"({_IDEAL}) and chain B and resi 2"
+    direct = _fit_pairs(cmd, iA, a1) + _fit_pairs(cmd, iB, a2)
+    swapped = _fit_pairs(cmd, iB, a1) + _fit_pairs(cmd, iA, a2)
+    pairs = direct if len(direct) >= len(swapped) else swapped
+    if len(pairs) < 8:                       # < 4 shared atoms -> unreliable fit
+        _clear_ideal(cmd)
+        return False
+    try:
+        cmd.pair_fit(*pairs)
+    except Exception:                        # noqa: BLE001 - bail on a fit failure
+        _clear_ideal(cmd)
+        return False
+    # Green ghost: thin, semi-transparent sticks, distinct from the real pair.
+    cmd.hide("everything", _IDEAL)
+    cmd.show("sticks", _IDEAL)
+    cmd.set("stick_radius", 0.12, _IDEAL)
+    cmd.set("stick_transparency", 0.3, _IDEAL)
+    cmd.color("green", _IDEAL)
+    # The ideal's optimized H-bonds (green dashes).
+    cmd.distance(_IDEAL_HB, _IDEAL, _IDEAL, mode=2)
+    cmd.hide("labels", _IDEAL_HB)
+    cmd.color("green", _IDEAL_HB)
+    return True
 
 
 def _set_hud(cmd, text):
@@ -552,8 +741,107 @@ def parse_prev(_self=None):
     _focus(cmd, _POS - 1)
 
 
+def parse_overview(_self=None):
+    """Zoom back out to the whole-structure overview after parse_next/parse_prev.
+
+    Undims the cartoon, drops the per-pair focus objects, re-shows the overlay
+    of all flagged pairs, resets the worklist to the top, and frames the whole
+    structure. Does NOT re-score (use parse_score to recompute).
+    """
+    from pymol import cmd
+    if _SCORED_OBJ is None:
+        print("PARSE: nothing scored - run parse_score first")
+        return
+    global _POS
+    for o in (_FOCUS, _CONTEXT, _HB, _IDEAL, _IDEAL_HB):   # drop per-pair objects
+        cmd.delete(o)
+    cmd.set("cartoon_transparency", 0.0, _SCORED_OBJ)   # undim the structure
+    cmd.show("cartoon", f"({_SCORED_OBJ}) and ({_BASE_ATOMS_SEL})")  # restore base ladder
+    cmd.enable(_OVERLAY)                        # re-show all flagged pairs
+    _POS = -1                                   # overview = not on any one pair
+    cmd.zoom(_SCORED_OBJ)                       # frame the whole structure
+
+    # Whole-RNA score line (console + HUD).
+    def _f(x):
+        return f"{x:.1f}" if isinstance(x, (int, float)) else "?"
+    ss = _STRUCT_SCORE or {}
+    score_line = (f"{_SCORED_OBJ}: overall PARSE {_f(ss.get('overall'))}/100  "
+                  f"(pairs {_f(ss.get('pairs'))}, backbone {_f(ss.get('residues'))})  "
+                  f"— {len(_QUEUE)} flagged pair(s)")
+    print(f"PARSE: overview — {score_line}")
+    _set_hud(cmd, f"PARSE overview   {score_line}   (→ parse_next to step through)")
+
+
+def _parse_residue_token(token):
+    """Parse a residue reference into (chain, resseq), or None.
+
+    Accepts 'A-169', 'A/169', 'A 169', 'A:169', 'A169', or a full PARSE res-id
+    'chain-resname-resseq' (e.g. 'A-G-169', '1A-5MU-54'). Chain may be multi-char.
+    """
+    t = token.strip()
+    if t.count("-") >= 2:                      # looks like a full res-id
+        try:
+            chain, _name, seq = parse_res_id(t)
+            return chain, seq
+        except (ValueError, IndexError):
+            pass
+    m = re.match(r"^([A-Za-z0-9]+?)[-/ :]+(-?\d+)$", t)   # chain<sep>resseq
+    if m:
+        return m.group(1), m.group(2)
+    m = re.match(r"^([A-Za-z]+)(-?\d+)$", t)              # chainresseq, no sep
+    if m:
+        return m.group(1), m.group(2)
+    return None
+
+
+def _pair_view(p):
+    """Build a flagged_pairs-style view dict from a raw scored pair `p`.
+
+    Works for clean (Preferred) pairs too: worst_* is None and sev is 0 when
+    nothing is out of range, which _render_focus draws green and reports in-range.
+    """
+    w = worst_parameter(p.get("issue_details"))
+    rank = rank_severity(w) if w else 0.0
+    return {
+        "res_id1": p["res_id1"], "res_id2": p["res_id2"],
+        "sequence": p.get("sequence"),
+        "lw_class": (p.get("classification") or {}).get("lw_class"),
+        "rank": rank, "sev": min(1.0, rank),
+        "worst_issue": w.get("issue") if w else None,
+        "worst_z": w.get("zprime") if w else None,
+        "tier": (w.get("tier", "") if w else "Preferred"),
+        "score": p.get("score"),
+        "issue": w.get("issue") if w else None,
+        "details": p.get("issue_details", []),
+    }
+
+
+def _find_scored_pairs(chain, resseq):
+    """All scored pairs (flagged or clean) containing residue chain+resseq."""
+    found = []
+    for p in (_SCORED_DATA or {}).get("pairs", []):
+        for rid in (p.get("res_id1"), p.get("res_id2")):
+            if not rid:
+                continue
+            try:
+                c, _n, s = parse_res_id(rid)
+            except (ValueError, IndexError):
+                continue
+            if c == chain and s == resseq:
+                found.append(p)
+                break
+    return found
+
+
 def parse_goto(which, _self=None):
-    """Jump to a worklist entry by 1-based rank, or by a res-id substring."""
+    """Jump to a pair by worklist rank, or inspect any residue by chain+number.
+
+    - `parse_goto 12`     -> the 12th worklist entry (flagged, worst-first).
+    - `parse_goto A-169`  -> the pair containing chain A residue 169, EVEN IF it
+                             is a clean (Preferred) pair not in the worklist; prints
+                             its score and which parameters (if any) are out of range.
+    Residue forms: 'A-169', 'A/169', 'A 169', 'A169', or a full 'A-G-169'.
+    """
     from pymol import cmd
     if not _require_queue():
         return
@@ -565,11 +853,31 @@ def parse_goto(which, _self=None):
             return
         _focus(cmd, idx)
         return
+
+    res = _parse_residue_token(token)
+    if res is None:
+        print(f"PARSE: '{token}' is not a rank or a chain+number (e.g. 12 or A-169)")
+        return
+    chain, resseq = res
+
+    # A flagged worklist pair -> normal focus (keeps its rank + advances cursor).
     for i, f in enumerate(_QUEUE):
-        if token in f["res_id1"] or token in f["res_id2"]:
-            _focus(cmd, i)
-            return
-    print(f"PARSE: no worklist pair matching '{token}'")
+        for rid in (f["res_id1"], f["res_id2"]):
+            c, _n, s = parse_res_id(rid)
+            if c == chain and s == resseq:
+                _focus(cmd, i)
+                return
+
+    # Otherwise look across ALL scored pairs (clean ones included).
+    hits = _find_scored_pairs(chain, resseq)
+    if not hits:
+        print(f"PARSE: {chain}/{resseq} is not in any scored pair "
+              f"(unpaired, or not in this structure)")
+        return
+    _render_focus(cmd, _pair_view(hits[0]), dim=1)       # ad-hoc: cursor untouched
+    if len(hits) > 1:
+        partners = ", ".join(pair_label(_pair_view(p)) for p in hits[1:])
+        print(f"  note: {chain}/{resseq} is also in {len(hits) - 1} other pair(s): {partners}")
 
 
 def parse_list(n=25, _self=None):
@@ -582,9 +890,127 @@ def parse_list(n=25, _self=None):
         mark = ">" if i == _POS else " "
         print(f" {mark}{i + 1:>4}  {pair_label(f)}  "
               f"{f.get('lw_class') or '?'} {f.get('sequence') or ''}  "
+              f"score {pair_score_str(f)}/100  "
               f"{severity_headline(f)} {f['tier']}  [{failing_params(f['details'], 2)}]")
     if len(_QUEUE) > n:
         print(f"  ... {len(_QUEUE) - n} more (parse_list {len(_QUEUE)} for all)")
+
+
+def parse_dump(path=None, _self=None):
+    """Write the current scored data to a JSON file the user can inspect.
+
+    This is exactly the JSON the last parse_score computed (every pair with its
+    score, issues, geometry and rigid-body params, plus the structure-level
+    scores) -- including any coordinate edits you re-scored. Nothing is written
+    unless you call this. Default path: 'pairs/<object>_pairs.json' (the pairs/
+    folder is created if it does not exist).
+    """
+    import json
+    import os
+    if _SCORED_DATA is None or _SCORED_OBJ is None:
+        print("PARSE: nothing scored - run parse_score first")
+        return
+    path = str(path) if path else os.path.join("pairs", f"{_SCORED_OBJ}_pairs.json")
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    try:
+        with open(path, "w") as fh:
+            json.dump(_SCORED_DATA, fh, indent=1)
+    except OSError as e:        # noqa: BLE001 - report write failures to the user
+        print(f"PARSE: could not write {path}: {e}")
+        return
+    n = len(_SCORED_DATA.get("pairs", []))
+    print(f"PARSE: wrote {n} scored pair(s) to {path}")
+
+
+def parse_load(path, _self=None):
+    """Rebuild the worklist from a parse_dump JSON -- WITHOUT re-scoring.
+
+    Lets anyone (e.g. a colleague you sent the .pse + JSON to) step through a
+    previously scored structure -- parse_next / parse_prev / parse_list /
+    parse_overview / parse_dump -- with no pairfinder binary. The object named
+    in the JSON (its 'pdb_id') should already be loaded, e.g. from the .pse.
+    """
+    from pymol import cmd
+    import json
+    try:
+        with open(str(path)) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as e:        # noqa: BLE001 - report bad file
+        print(f"PARSE: could not read {path}: {e}")
+        return
+    obj = data.get("pdb_id")
+    if not obj:
+        print(f"PARSE: {path} has no 'pdb_id' - not a parse_dump file?")
+        return
+    if obj not in cmd.get_object_list():
+        print(f"PARSE: note - object '{obj}' is not loaded; navigation needs it "
+              f"(open its .pse/structure first).")
+
+    global _QUEUE, _POS, _SCORED_OBJ, _STRUCT_SCORE, _SCORED_DATA
+    _SCORED_DATA = data
+    _SCORED_OBJ = obj
+    _QUEUE = build_queue(flagged_pairs(data))
+    _POS = -1
+    _STRUCT_SCORE = {
+        "overall":  data.get("overall_score"),
+        "pairs":    data.get("pairs_score"),
+        "residues": data.get("residues_score"),
+        "n_pairs":  data.get("n_pairs"),
+    }
+    _bind_nav(cmd)
+    print(f"PARSE: loaded {len(_QUEUE)} flagged pair(s) for '{obj}' from {path}  "
+          f"(parse_next to step through — no re-scoring)")
+
+
+def parse_ideal(state="toggle", _self=None):
+    """Overlay the idealized version of the current pair (green ghost) to show
+    the target geometry — what the pair *should* look like, so a refiner can see
+    how to fix it.
+
+        parse_ideal on     keep the ideal overlaid on every parse_next/parse_goto
+        parse_ideal off    stop overlaying it
+        parse_ideal        toggle for the current pair
+
+    The ideal is best-fit onto the actual pair (least-squares over the shared base
+    atoms), so both bases show how far they sit from ideal. Templates come from
+    resources/basepair-idealized/<class>/<seq>.pdb (set with parse_set_ideals).
+    """
+    from pymol import cmd
+    global _SHOW_IDEAL
+    s = str(state).lower()
+    if s in ("off", "0", "false", "hide", "no"):
+        _SHOW_IDEAL = False
+    elif s in ("on", "1", "true", "show", "yes"):
+        _SHOW_IDEAL = True
+    else:
+        _SHOW_IDEAL = not _SHOW_IDEAL        # bare `parse_ideal` toggles
+
+    if not _SHOW_IDEAL:
+        _clear_ideal(cmd)
+        print("PARSE: ideal overlay OFF")
+        return
+    print("PARSE: ideal overlay ON — green ghost = ideal geometry for this pair")
+    if _LAST_FOCUS is None:
+        print("  (step to a pair with parse_next / parse_goto to see it)")
+        return
+    f = _LAST_FOCUS
+    if not _overlay_ideal(cmd, f):
+        print(f"  ideal: no template for {f.get('lw_class')} {f.get('sequence')}")
+        return
+    # Frame the ghost together with the real pair (covers the parse_overview case,
+    # where no pair is focused so the camera would otherwise stay zoomed out).
+    s1, s2 = residue_selection(f["res_id1"]), residue_selection(f["res_id2"])
+    cmd.zoom(f"({_IDEAL}) or (({_SCORED_OBJ}) and ({s1} or {s2}))", 5)
+
+
+def parse_set_ideals(path, _self=None):
+    """Set the directory holding idealized base-pair templates (<class>/<seq>.pdb)."""
+    global _IDEALS_DIR
+    _IDEALS_DIR = os.path.normpath(str(path))
+    ok = os.path.isdir(_IDEALS_DIR)
+    print(f"PARSE: idealized-pair dir = {_IDEALS_DIR}" + ("" if ok else "  (NOT FOUND)"))
 
 
 def parse_info(selection="pk1", _self=None):
@@ -605,14 +1031,23 @@ def parse_info(selection="pk1", _self=None):
     if not picks:
         print("PARSE: nothing selected — click an atom first, or pass a selection")
         return
-    chain, resi = picks[0]
+    # A selection can span several residues (a whole pair, a box-select, a named
+    # `sele`); check every distinct residue in it, not just the first atom, and
+    # jump to the first one that belongs to a flagged pair.
+    wanted, seen = [], set()
+    for chain, resi in picks:
+        if (chain, resi) not in seen:
+            seen.add((chain, resi))
+            wanted.append((chain, resi))
     for i, f in enumerate(_QUEUE):
         for rid in (f["res_id1"], f["res_id2"]):
             c, _name, s = parse_res_id(rid)
-            if c == chain and s == resi:
+            if (c, s) in seen:
                 _focus(cmd, i)
                 return
-    print(f"PARSE: {chain}/{resi} is not a flagged pair (Preferred or unscored)")
+    shown = ", ".join(f"{c}/{r}" for c, r in wanted[:6])
+    print(f"PARSE: {shown} — not in the worklist (Preferred or unscored). "
+          f"`parse_list` shows the {len(_QUEUE)} flagged pair(s).")
 
 
 #: nav keybindings — PyMOL's set_key only takes special/modifier keys (not plain
@@ -655,11 +1090,17 @@ try:
     _cmd.extend("parse_set_binary", parse_set_binary)
     _cmd.extend("parse_next", parse_next)
     _cmd.extend("parse_prev", parse_prev)
+    _cmd.extend("parse_overview", parse_overview)
     _cmd.extend("parse_goto", parse_goto)
     _cmd.extend("parse_list", parse_list)
+    _cmd.extend("parse_dump", parse_dump)
+    _cmd.extend("parse_load", parse_load)
     _cmd.extend("parse_info", parse_info)
     _cmd.extend("parse_keys", parse_keys)
+    _cmd.extend("parse_ideal", parse_ideal)
+    _cmd.extend("parse_set_ideals", parse_set_ideals)
     print("PARSE plugin loaded: parse_score / parse_clear / parse_set_binary / "
-          "parse_next / parse_prev / parse_goto / parse_list / parse_info / parse_keys")
+          "parse_next / parse_prev / parse_overview / parse_goto / parse_list / "
+          "parse_dump / parse_load / parse_info / parse_keys")
 except ImportError:
     pass
