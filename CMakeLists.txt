@@ -54,7 +54,7 @@ target_include_directories(pairfinder_core
 target_compile_features(pairfinder_core PUBLIC cxx_std_20)
 # Dev fallback for the resource locator: the in-source resources/ dir, used only
 # when the locator can't find resources exe-relative, cwd-relative, or via
-# $PAIRFINDER_RESOURCES (so running from a dev tree always works).
+# $PARSE_RESOURCES (so running from a dev tree always works).
 target_compile_definitions(pairfinder_core PRIVATE
     PAIRFINDER_SOURCE_RESOURCES="${CMAKE_CURRENT_SOURCE_DIR}/resources")
 

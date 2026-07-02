@@ -161,15 +161,35 @@ parse-view 1GID        # a PDB id
 parse-view file.cif    # or a local file
 ```
 
-This also writes the scored JSON to `pairs/1GID_pairs.json`. PyMOL is only
-needed for this viewer — the core `parse` tool does not require it.
+This also writes the scored JSON to `pairs/1GID_pairs.json`.
 
-Once PyMOL is open, an interactive worklist lets you step through the
-lowest-quality pairs (`parse_next` / `parse_prev`), jump to any pair or residue
-(`parse_goto`), inspect a clicked residue (`parse_info`), overlay the idealized
-target geometry (`parse_ideal`), and dump the scored pairs (`parse_dump`). The
-full command reference and keyboard navigation are documented in
+### Commands inside PyMOL
+
+Once the viewer is open, drive it with these commands (type them in the PyMOL
+command line). Arguments in `[...]` are optional.
+
+| command | what it does |
+|---|---|
+| `parse_score [obj], [min_severity], [zoom]` | score the structure + highlight all flagged pairs (worst = red). `min_severity` hides mild issues; `zoom=1` flies to the flagged pairs |
+| `parse_list [n]` | print the ranked worklist of the worst pairs (default 25) |
+| `parse_next` / `parse_prev` | step through the worklist one pair at a time |
+| `parse_goto <rank \| residue>` | jump to worklist entry `12`, **or** inspect any residue by `A-169` / `A169` / `A-G-169` (even a clean pair not in the worklist) — prints its score and what's out of range |
+| `parse_info [selection]` | inspect a clicked/selected residue → jump the worklist to its pair |
+| `parse_overview` | zoom back out to the whole-structure overview |
+| `parse_ideal [on\|off]` | overlay the **idealized** target geometry of the current pair (green ghost) so you can see how to fix it; sticky toggle, default off |
+| `parse_dump [path]` | write the scored pairs (incl. any coordinate edits) to JSON — default `pairs/<obj>_pairs.json` |
+| `parse_load <path>` | rebuild the worklist from a `parse_dump` JSON — **no binary, no re-scoring** (for sharing a scored session) |
+| `parse_keys [on\|off]` | bind/unbind arrow-key navigation |
+| `parse_clear` | remove every overlay and reset |
+| `parse_set_binary <path>` | point the plugin at a specific `parse` binary |
+| `parse_set_ideals <path>` | set the idealized-template dir |
+
+A typical loop: `parse_score` → `parse_next` through the red pairs → `parse_ideal`
+to see the target → fix geometry / re-refine → re-run `parse_score`. Keyboard
+navigation and the color scheme are covered in
 [`integrations/pymol/README.md`](integrations/pymol/README.md).
+
+PyMOL is only needed for this viewer — the core `parse` tool does not require it.
 
 ---
 
