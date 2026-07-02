@@ -10,7 +10,7 @@ What it does each run:
      single characters so big multi-chain structures -- e.g. a ribosome with
      chain "1A" -- survive the legacy-PDB round-trip; res_ids are mapped back
      to the real chain names afterwards),
-  2. runs the `pairfinder` binary on it (sub-second, even on a ribosome),
+  2. runs the `parse` binary on it (sub-second, even on a ribosome),
   3. colors the whole structure gray (so Preferred geometry recedes), then builds
      an overlay object `parse_overlay` of just the flagged base pairs, shown as
      sticks on a continuous yellow->red heat-map by Cerny severity (mild
@@ -21,7 +21,7 @@ Re-run after an edit/refinement round and the overlay rebuilds from scratch, so 
 pair that's been fixed simply disappears. Only colors change — coordinates are
 never modified (pass gray_background=0 to keep the object's existing colors).
 
-Binary: set $PAIRFINDER_BINARY, or `parse_set_binary /path/to/pairfinder`.
+Binary: set $PARSE_BINARY, or `parse_set_binary /path/to/parse`.
 Tiers follow Cerny et al. (NAR 2026): Of Concern |Z'|>5, Allowed |Z'|<=5,
 Preferred (unflagged). H-bond-count issues carry no ProSco/Z' tier and are
 reported in the summary only, not colored.
@@ -222,7 +222,7 @@ def format_summary(data, flagged, hbcount, obj):
 # PyMOL integration
 # ---------------------------------------------------------------------------
 
-_BINARY = os.environ.get("PAIRFINDER_BINARY", "pairfinder")
+_BINARY = os.environ.get("PARSE_BINARY", "parse")
 _OVERLAY = "parse_overlay"
 _PROBLEMS = "parse_problems"
 _FOCUS = "parse_focus"        # worklist: the current pair (bright sticks)
@@ -278,16 +278,16 @@ def _resolve_binary():
     if found:
         return found
     raise RuntimeError(
-        f"pairfinder binary not found ('{_BINARY}'). "
-        f"Set it with: parse_set_binary /path/to/pairfinder")
+        f"parse binary not found ('{_BINARY}'). "
+        f"Set it with: parse_set_binary /path/to/parse")
 
 
-def _run_pairfinder(pdb_path):
+def _run_parse(pdb_path):
     binary = _resolve_binary()
     out = subprocess.run([binary, pdb_path, "--no-download"],
                          capture_output=True, text=True)
     if out.returncode != 0:
-        raise RuntimeError(f"pairfinder failed:\n{out.stderr.strip()}")
+        raise RuntimeError(f"parse failed:\n{out.stderr.strip()}")
     return json.loads(out.stdout)
 
 
@@ -335,7 +335,7 @@ def _score_object(cmd, obj):
             # No nucleotides, or more chains than the single-char pool: best-effort
             # direct save (small single-char-chain structures already round-trip).
             cmd.save(tmp.name, obj)
-        data = _run_pairfinder(tmp.name)
+        data = _run_parse(tmp.name)
     finally:
         os.unlink(tmp.name)
 
@@ -348,7 +348,7 @@ def _score_object(cmd, obj):
 
 
 def parse_set_binary(path):
-    """Point the plugin at a specific pairfinder binary."""
+    """Point the plugin at a specific parse binary."""
     global _BINARY
     _BINARY = path
     print(f"PARSE: binary = {path}")
@@ -929,7 +929,7 @@ def parse_load(path, _self=None):
 
     Lets anyone (e.g. a colleague you sent the .pse + JSON to) step through a
     previously scored structure -- parse_next / parse_prev / parse_list /
-    parse_overview / parse_dump -- with no pairfinder binary. The object named
+    parse_overview / parse_dump -- with no parse binary. The object named
     in the JSON (its 'pdb_id') should already be loaded, e.g. from the .pse.
     """
     from pymol import cmd

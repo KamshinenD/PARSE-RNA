@@ -3,7 +3,7 @@
 # parse-view <pdb-id | structure-file>
 #
 # One command: open PyMOL, load the structure (a PDB id is fetched from RCSB, a
-# local .pdb/.cif is loaded directly), score it with pairfinder, and highlight
+# local .pdb/.cif is loaded directly), score it with parse, and highlight
 # the problematic base pairs. The PyMOL window stays open for inspection.
 #
 #   ./parse-view 1GID
@@ -11,15 +11,29 @@
 #
 # Env overrides:
 #   PYMOL=/path/to/pymol          pick a specific PyMOL executable
-#   PAIRFINDER_BINARY=/path/...    pick a specific pairfinder binary
+#   PARSE_BINARY=/path/...    pick a specific parse binary
 #   PARSE_VIEW_DRYRUN=1            print the PyMOL command block and exit
 #
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # integrations/pymol
-REPO="$(cd "$HERE/../.." && pwd)"                       # repo root
-PLUGIN="$HERE/parse_pymol.py"
-BIN="${PAIRFINDER_BINARY:-$REPO/build/pairfinder}"
+REPO="$(cd "$HERE/../.." 2>/dev/null && pwd || echo "$HERE")"   # repo root (if in a checkout)
+
+# PyMOL plugin: repo checkout (next to this script) or installed (../share/parse).
+if [ -f "$HERE/parse_pymol.py" ]; then
+    PLUGIN="$HERE/parse_pymol.py"
+else
+    PLUGIN="$HERE/../share/parse/parse_pymol.py"
+fi
+
+# parse binary: explicit override -> on PATH -> repo build dir.
+if [ -n "${PARSE_BINARY:-}" ]; then
+    BIN="$PARSE_BINARY"
+elif command -v parse >/dev/null 2>&1; then
+    BIN="$(command -v parse)"
+else
+    BIN="$REPO/build/parse"
+fi
 
 INPUT="${1:-}"
 if [ -z "$INPUT" ]; then
@@ -27,8 +41,8 @@ if [ -z "$INPUT" ]; then
     exit 2
 fi
 if [ ! -x "$BIN" ]; then
-    echo "pairfinder binary not found/executable: $BIN" >&2
-    echo "build it first, or set PAIRFINDER_BINARY=/path/to/pairfinder" >&2
+    echo "parse binary not found/executable: $BIN" >&2
+    echo "build it first, or set PARSE_BINARY=/path/to/parse" >&2
     exit 1
 fi
 
@@ -43,10 +57,10 @@ else
 fi
 # PyMOL object names must be simple tokens; sanitize before using the name.
 OBJ="$(printf '%s' "$OBJ" | tr -c 'A-Za-z0-9_-' '_')"
-# Cache fetched structures in the pairfinder cache (~/.cache/pairfinder, or
-# $PAIRFINDER_CACHE_DIR) instead of the current directory, so `fetch` never
+# Cache fetched structures in the parse cache (~/.cache/parse, or
+# $PARSE_CACHE_DIR) instead of the current directory, so `fetch` never
 # drops a .cif into the working folder.
-CACHE="${PAIRFINDER_CACHE_DIR:-$HOME/.cache/pairfinder}"
+CACHE="${PARSE_CACHE_DIR:-$HOME/.cache/parse}"
 mkdir -p "$CACHE"
 if [ "$KIND" = file ]; then
     LOADCMD="load $INPUT, $OBJ"

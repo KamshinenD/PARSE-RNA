@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief pairfinder CLI entry point.
+ * @brief parse CLI entry point.
  *
  * Production path: resolve the input (a 4-char PDB id fetched from RCSB, or a
  * local .cif/.pdb(.gz)), run the find + classify + score pipeline, and emit the
@@ -89,7 +89,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
               const std::string& out_path) {
     using namespace pairfinder;
     // Per-stage wall-clock when PAIRFINDER_PROFILE is set (-> stderr).
-    const bool prof = std::getenv("PAIRFINDER_PROFILE") != nullptr;
+    const bool prof = std::getenv("PARSE_PROFILE") != nullptr;
     auto t0 = std::chrono::steady_clock::now();
     auto lap = [&](const char* name) {
         if (!prof) return;
@@ -270,14 +270,14 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
 
 // ---- PDB-ID auto-fetch (input acquisition; upstream of the pipeline) ---------
 
-// Cache dir for downloaded structures: --cache-dir, else $PAIRFINDER_CACHE_DIR,
-// else ~/.cache/pairfinder, else <tmp>/pairfinder. Persistent + per-user.
+// Cache dir for downloaded structures: --cache-dir, else $PARSE_CACHE_DIR,
+// else ~/.cache/parse, else <tmp>/parse. Persistent + per-user.
 std::filesystem::path cache_dir(const std::string& override_dir) {
     if (!override_dir.empty()) return override_dir;
-    if (const char* e = std::getenv("PAIRFINDER_CACHE_DIR")) return e;
+    if (const char* e = std::getenv("PARSE_CACHE_DIR")) return e;
     if (const char* h = std::getenv("HOME"))
-        return std::filesystem::path(h) / ".cache" / "pairfinder";
-    return std::filesystem::temp_directory_path() / "pairfinder";
+        return std::filesystem::path(h) / ".cache" / "parse";
+    return std::filesystem::temp_directory_path() / "parse";
 }
 
 // A bare PDB id: short, all-alphanumeric (e.g. 6V3A, 1GID). Distinguishes an id
@@ -365,15 +365,15 @@ int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
 
     if (args.empty() || args[0] == "-h" || args[0] == "--help") {
-        std::cout << "pairfinder " << kVersion << "\n"
+        std::cout << "parse " << kVersion << "\n"
                   << "usage:\n"
-                  << "  pairfinder <pdb-id | structure-file> [options]\n"
+                  << "  parse <pdb-id | structure-file> [options]\n"
                   << "      find + classify + score -> JSON (stdout or --out FILE)\n"
                   << "      a bare PDB id (e.g. 6V3A) is downloaded from RCSB and cached;\n"
                   << "      an existing .cif/.pdb(.gz) path is used directly.\n"
                   << "  options: --out FILE  --details  --no-score  --no-download  --cache-dir DIR\n"
-                  << "  cache:   $PAIRFINDER_CACHE_DIR or ~/.cache/pairfinder\n"
-                  << "  pairfinder dump-parse <input.pdb>   # parsed atoms (TSV)\n";
+                  << "  cache:   $PARSE_CACHE_DIR or ~/.cache/parse\n"
+                  << "  parse dump-parse <input.pdb>   # parsed atoms (TSV)\n";
         return args.empty() ? 1 : 0;
     }
     if (args[0] == "--version") {
@@ -396,7 +396,7 @@ int main(int argc, char** argv) {
         return pfcli::classify_suite(std::vector<std::string>(args.begin() + 1, args.begin() + 8));
     }
 
-    // Default: `pairfinder <pdb-id | structure-file> [options]` runs the full
+    // Default: `parse <pdb-id | structure-file> [options]` runs the full
     // pipeline and emits the find_pairs.py-parity JSON. A bare PDB id is fetched
     // from RCSB (cached) unless an existing file path is given.
     const std::string input = args[0];

@@ -46,14 +46,14 @@ bool valid_root(const std::filesystem::path& p) {
 }
 
 std::filesystem::path resolve_root() {
-    if (const char* env = std::getenv("PAIRFINDER_RESOURCES")) {
+    if (const char* env = std::getenv("PARSE_RESOURCES")) {
         std::filesystem::path p(env);
         if (valid_root(p)) return p;
     }
     const std::filesystem::path exe = executable_path();
     if (!exe.empty()) {
         const std::filesystem::path dir = exe.parent_path();
-        for (const char* rel : {"resources", "../resources", "../share/pairfinder/resources"}) {
+        for (const char* rel : {"resources", "../resources", "../share/parse/resources"}) {
             std::filesystem::path p = dir / rel;
             if (valid_root(p)) {
                 std::error_code ec;

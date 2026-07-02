@@ -39,11 +39,11 @@ std::string upper(std::string s) {
     return s;
 }
 
-// modified_nucleotides.json: env PAIRFINDER_NT_CONFIG, else the bundled resource.
+// modified_nucleotides.json: env PARSE_NT_CONFIG, else the bundled resource.
 // Loaded once.
 const core::NucleotideRegistry& nucleotide_registry() {
     static const core::NucleotideRegistry registry([] {
-        if (const char* env = std::getenv("PAIRFINDER_NT_CONFIG")) return std::string(env);
+        if (const char* env = std::getenv("PARSE_NT_CONFIG")) return std::string(env);
         return resources::config("modified_nucleotides.json").string();
     }());
     return registry;

@@ -1,13 +1,13 @@
 # PARSE → PyMOL
 
 Highlight problematic base pairs in PyMOL during refinement, using the
-`pairfinder` binary. Flagged pairs are shown as sticks on a continuous
+`parse` binary. Flagged pairs are shown as sticks on a continuous
 yellow→red heat-map by Černý severity; re-run after an edit and a fixed pair
 disappears. The original object is never modified.
 
 ## Quick start (one command)
 
-From the repo, after building `pairfinder`:
+From the repo, after building `parse`:
 
 ```bash
 ./integrations/pymol/parse-view 1GID                 # a PDB id (fetched from RCSB)
@@ -15,8 +15,8 @@ From the repo, after building `pairfinder`:
 ```
 
 This opens PyMOL, loads the plugin, loads the structure, scores it, and
-highlights the issues — all in one go. (Override the PyMOL or pairfinder
-executable with `PYMOL=...` / `PAIRFINDER_BINARY=...`; `PARSE_VIEW_DRYRUN=1`
+highlights the issues — all in one go. (Override the PyMOL or parse
+executable with `PYMOL=...` / `PARSE_BINARY=...`; `PARSE_VIEW_DRYRUN=1`
 prints the PyMOL commands without launching.)
 
 To drive it interactively inside an already-open PyMOL session instead, use the
@@ -24,10 +24,10 @@ commands below.
 
 ## Setup
 
-1. Build `pairfinder` (see the top-level README).
+1. Build `parse` (see the top-level README).
 2. Tell the plugin where the binary is — either:
-   - export `PAIRFINDER_BINARY=/path/to/build/pairfinder` before launching PyMOL, or
-   - run `parse_set_binary /path/to/build/pairfinder` inside PyMOL.
+   - export `PARSE_BINARY=/path/to/build/parse` before launching PyMOL, or
+   - run `parse_set_binary /path/to/build/parse` inside PyMOL.
 3. In PyMOL: `run /path/to/integrations/pymol/parse_pymol.py`
 
 ## Use
@@ -42,7 +42,7 @@ parse_clear                 # remove the overlay
 
 Each `parse_score` run:
 1. saves the object's **current** coordinates to a temp PDB,
-2. runs `pairfinder` on it (sub-second, even on a ribosome),
+2. runs `parse` on it (sub-second, even on a ribosome),
 3. builds a non-destructive overlay object `parse_overlay` containing only the
    flagged pairs (sticks, colored by severity), plus a `parse_problems`
    selection you can `zoom parse_problems` / iterate over,
@@ -88,7 +88,7 @@ never modified.
 | `parse_ideal [on\|off]` | overlay the **idealized** version of the current pair (green ghost = target geometry) so a refiner sees how to fix it; sticky toggle, default off |
 | `parse_keys [on\|off]` | bind/unbind the navigation keys |
 | `parse_clear` | remove every overlay + reset |
-| `parse_set_binary <path>` | set the pairfinder binary path |
+| `parse_set_binary <path>` | set the parse binary path |
 | `parse_set_ideals <path>` | set the idealized-template dir (default `resources/basepair-idealized`) |
 
 ## Guided navigation (keys, on-screen status, click-to-inspect)
@@ -170,7 +170,7 @@ template exists for a pair's class+sequence, it says so and shows nothing.
 
 A `.pse` saves the *picture* but not the plugin or the worklist, so a colleague
 can't navigate from it alone. To let someone step through a scored structure
-**without the `pairfinder` binary and without re-scoring**, send three files:
+**without the `parse` binary and without re-scoring**, send three files:
 
 1. `1y26.pse`        — the session (`save 1y26.pse` after scoring)
 2. `1y26_pairs.json` — the worklist (`parse_dump`)

@@ -89,27 +89,35 @@ target_compile_options(pairfinder_core PRIVATE
     $<$<BOOL:${PAIRFINDER_WARNINGS_AS_ERRORS}>:-Werror>)
 
 # ---- CLI app ----------------------------------------------------------------
-add_executable(pairfinder
+add_executable(parse
     apps/main.cpp
     apps/support/cli_support.cpp
     apps/differential/differential_commands.cpp)
-target_link_libraries(pairfinder PRIVATE pairfinder_core)
+target_link_libraries(parse PRIVATE pairfinder_core)
 # apps/ on the include path so the CLI TUs include their siblings as
 # "support/cli_support.hpp" / "differential/differential_commands.hpp" (no ../ paths).
-target_include_directories(pairfinder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+target_include_directories(parse PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
 
 # Make the build tree self-contained: copy resources/ next to the binary so the
 # exe-relative locator finds it (build/<cfg>/resources or build/resources).
-add_custom_command(TARGET pairfinder POST_BUILD
+add_custom_command(TARGET parse POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:pairfinder>/resources"
-    COMMENT "Staging bundled resources next to pairfinder")
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:parse>/resources"
+    COMMENT "Staging bundled resources next to parse")
 
 # ---- Install ----------------------------------------------------------------
-# Installed layout: <prefix>/bin/pairfinder + <prefix>/share/pairfinder/resources
-# (resolved by the locator's <exe>/../share/pairfinder/resources rule).
-install(TARGETS pairfinder RUNTIME DESTINATION bin)
+# Installed layout: <prefix>/bin/parse + <prefix>/share/parse/resources
+# (resolved by the locator's <exe>/../share/parse/resources rule).
+install(TARGETS parse RUNTIME DESTINATION bin)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources/"
-    DESTINATION share/pairfinder/resources)
+    DESTINATION share/parse/resources)
+
+# Optional PyMOL viewer: the launcher goes on PATH (bin/), its plugin alongside
+# the shared data. parse-view resolves the plugin from ../share/parse and
+# finds `parse` on PATH when installed.
+install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/integrations/pymol/parse-view"
+    DESTINATION bin)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/integrations/pymol/parse_pymol.py"
+    DESTINATION share/parse)
 
 # Unit tests are developer-only and are not part of this package.
