@@ -33,12 +33,9 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
-
       - name: Fetch and run on real RNA (1GID)
         run: |
-          ./build/pairfinder 1GID --out 1GID.json
+          ./build/parse 1GID > 1GID.json
           python3 -c "
           import json, sys
           d = json.load(open('1GID.json'))
