@@ -411,7 +411,7 @@ def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=Non
     _STRUCT_SCORE = {                       # whole-RNA scores, shown by parse_overview
         "overall":  data.get("overall_score"),
         "pairs":    data.get("pairs_score"),
-        "residues": data.get("residues_score"),
+        "residues": data.get("backbone_score"),
         "n_pairs":  data.get("n_pairs"),
     }
 
@@ -956,7 +956,7 @@ def parse_load(path, _self=None):
     _STRUCT_SCORE = {
         "overall":  data.get("overall_score"),
         "pairs":    data.get("pairs_score"),
-        "residues": data.get("residues_score"),
+        "residues": data.get("backbone_score"),
         "n_pairs":  data.get("n_pairs"),
     }
     _bind_nav(cmd)

@@ -228,7 +228,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
     if (score) {
         out["overall_score"] = round_to(ss.overall, 2);
         out["pairs_score"] = round_to(ss.pairs_score, 2);
-        out["residues_score"] = round_to(ss.residues_score, 2);
+        out["backbone_score"] = round_to(ss.residues_score, 2);
         if (details) {
             // Group by human-readable category names — mirrors Python issue_summary().
             json summary = json::object();
@@ -241,7 +241,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             }
             out["score_details"] = json{
                 {"pairs_score", round_to(ss.pairs_score, 2)},
-                {"residues_score", round_to(ss.residues_score, 2)},
+                {"backbone_score", round_to(ss.residues_score, 2)},
                 {"issue_summary", summary},
                 {"n_scored_pairs", static_cast<int>(ss.pair_scores.size())},
                 {"n_residues_scored", static_cast<int>(ss.residue_scores.size())},

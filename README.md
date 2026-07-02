@@ -129,7 +129,7 @@ A JSON object per structure:
   "n_pairs": 31,                 // final selected base pairs
   "overall_score": 88.36,        // whole-RNA quality (0–100)
   "pairs_score": 98.46,          // base-pair geometry component
-  "residues_score": 69.57,       // backbone (suiteness) component
+  "backbone_score": 69.57,       // backbone (suiteness) component
   "pairs": [
     {
       "res_id1": "A-G-1", "res_id2": "A-C-72",
@@ -146,7 +146,7 @@ A JSON object per structure:
 }
 ```
 
-- **`overall_score` = 0.65 · `pairs_score` + 0.35 · `residues_score`.**
+- **`overall_score` = 0.65 · `pairs_score` + 0.35 · `backbone_score`.**
 - Per-pair `score` and per-structure scores are 0–100 (higher = better geometry).
 - A `classification.lw_class` containing `|` (e.g. `cWH|cWW`) with
   `is_ambiguous: true` means the edge assignment is genuinely undetermined
@@ -173,14 +173,14 @@ command line). Arguments in `[...]` are optional.
 
 | command | what it does |
 |---|---|
-| `parse_score [obj], [min_severity], [zoom]` | score the structure + highlight all flagged pairs (worst = red). `min_severity` hides mild issues; `zoom=1` flies to the flagged pairs |
+| `parse_score` | score the structure + highlight all flagged pairs (worst = red) |
 | `parse_list [n]` | print the ranked worklist of the worst pairs (default 25) |
 | `parse_next` / `parse_prev` | step through the worklist one pair at a time |
 | `parse_goto <rank \| residue>` | jump to worklist entry `12`, **or** inspect any residue by `A-169` / `A169` / `A-G-169` (even a clean pair not in the worklist) — prints its score and what's out of range |
 | `parse_info [selection]` | inspect a clicked/selected residue → jump the worklist to its pair |
 | `parse_overview` | zoom back out to the whole-structure overview |
 | `parse_ideal [on\|off]` | overlay the **idealized** target geometry of the current pair (green ghost) so you can see how to fix it; sticky toggle, default off |
-| `parse_dump [path]` | write the scored pairs (incl. any coordinate edits) to JSON — default `pairs/<obj>_pairs.json` |
+| `parse_dump` | write the scored pairs (incl. any coordinate edits) to `pairs/<obj>_pairs.json` |
 | `parse_load <path>` | rebuild the worklist from a `parse_dump` JSON — **no binary, no re-scoring** (for sharing a scored session) |
 | `parse_keys [on\|off]` | bind/unbind arrow-key navigation |
 | `parse_clear` | remove every overlay and reset |
