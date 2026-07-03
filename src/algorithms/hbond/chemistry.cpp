@@ -191,7 +191,7 @@ struct Cap  { const char* base; const char* atom; int cap; };
 
 }  // namespace
 
-HBondChemistry::HBondChemistry(const std::filesystem::path& ligand_db_path) {
+HBondChemistry::HBondChemistry(const std::filesystem::path& ligand_db_path, bool use_cache) {
     // --- BASE_CONNECTIVITY ---
     static const Conn kConn[] = {
         {"A","N6",{"C6"}}, {"A","N1",{"C2","C6"}}, {"A","N3",{"C2","C4"}},
@@ -242,6 +242,12 @@ HBondChemistry::HBondChemistry(const std::filesystem::path& ligand_db_path) {
         std::vector<std::string> ant(c.ant.begin(), c.ant.end());
         connectivity_[key(c.base, c.atom)] = std::move(ant);
     }
+
+    // Fast path: load the precomputed capacity tables (an exact serialization of
+    // the built-in + DB-extended tables below) instead of parsing the 1.5 MB
+    // ligand DB. connectivity_ is hardcoded above and unaffected by the DB.
+    if (use_cache && load_cache(ligand_db_path.parent_path() / "hbond_chemistry_cache.json"))
+        return;
 
     // --- DONOR_CAPACITY ---
     static const Cap kDonor[] = {
@@ -317,6 +323,43 @@ HBondChemistry::HBondChemistry(const std::filesystem::path& ligand_db_path) {
                     a.value("capacity", 1));
         }
     }
+}
+
+void HBondChemistry::save_cache(const std::filesystem::path& path) const {
+    nlohmann::json root = nlohmann::json::object();
+    nlohmann::json donors = nlohmann::json::object();
+    nlohmann::json acceptors = nlohmann::json::object();
+    for (const auto& [k, cap] : donor_cap_) donors[k] = cap;
+    for (const auto& [k, cap] : acceptor_cap_) acceptors[k] = cap;
+    root["donor"] = std::move(donors);
+    root["acceptor"] = std::move(acceptors);
+    std::ofstream out(path);
+    out << root.dump(2) << "\n";
+}
+
+bool HBondChemistry::load_cache(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+    nlohmann::json root;
+    try {
+        in >> root;
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+    if (!root.is_object() || !root.contains("donor") || !root.contains("acceptor"))
+        return false;
+    std::unordered_map<std::string, int> donors, acceptors;
+    for (auto it = root["donor"].begin(); it != root["donor"].end(); ++it) {
+        if (!it->is_number_integer()) return false;
+        donors[it.key()] = it->get<int>();
+    }
+    for (auto it = root["acceptor"].begin(); it != root["acceptor"].end(); ++it) {
+        if (!it->is_number_integer()) return false;
+        acceptors[it.key()] = it->get<int>();
+    }
+    donor_cap_ = std::move(donors);
+    acceptor_cap_ = std::move(acceptors);
+    return true;
 }
 
 }  // namespace pairfinder::algorithms::hbond

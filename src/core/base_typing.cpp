@@ -73,7 +73,12 @@ std::string infer_parent(const nlohmann::json& entry) {
 
 }  // namespace
 
-BaseTyping::BaseTyping(const std::filesystem::path& ligand_db_path) {
+BaseTyping::BaseTyping(const std::filesystem::path& ligand_db_path, bool use_cache) {
+    // Fast path: load the precomputed name->parent map (an exact serialization of
+    // the table built below) instead of parsing the 1.5 MB ligand DB every startup.
+    if (use_cache && load_cache(ligand_db_path.parent_path() / "base_typing_cache.json"))
+        return;
+
     std::ifstream in_file(ligand_db_path);
     if (!in_file.is_open()) return;
     nlohmann::json db;
@@ -101,6 +106,32 @@ BaseTyping::BaseTyping(const std::filesystem::path& ligand_db_path) {
             if (!inferred.empty()) extended_[code] = inferred;
         }
     }
+}
+
+void BaseTyping::save_cache(const std::filesystem::path& path) const {
+    nlohmann::json root = nlohmann::json::object();
+    for (const auto& [code, parent] : extended_) root[code] = parent;
+    std::ofstream out(path);
+    out << root.dump(2) << "\n";
+}
+
+bool BaseTyping::load_cache(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+    nlohmann::json root;
+    try {
+        in >> root;
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+    if (!root.is_object()) return false;
+    std::unordered_map<std::string, std::string> table;
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        if (!it->is_string()) return false;
+        table[it.key()] = it->get<std::string>();
+    }
+    extended_ = std::move(table);
+    return true;
 }
 
 std::string BaseTyping::normalize(std::string_view residue_name) const {

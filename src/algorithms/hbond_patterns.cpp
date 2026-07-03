@@ -11,6 +11,7 @@
 #include <set>
 #include <sstream>
 
+#include <nlohmann/json.hpp>
 #include <pairfinder/geometry/vector3d.hpp>
 
 namespace pairfinder::algorithms::classification {
@@ -164,7 +165,11 @@ std::vector<HBondPattern> derive_from_geometry(const std::string& text,
 }  // namespace
 
 HBondPatterns::HBondPatterns(std::filesystem::path idealized_dir,
-                             const hbond::HBondChemistry& chem) {
+                             const hbond::HBondChemistry& chem, bool use_cache) {
+    // Fast path: load the precomputed table (an exact serialization of the scan
+    // below) instead of parsing ~170 .pdb files with std::regex every startup.
+    if (use_cache && load_cache(idealized_dir / "hbond_patterns_cache.json")) return;
+
     if (!std::filesystem::exists(idealized_dir)) return;
     for (const auto& class_entry : std::filesystem::directory_iterator(idealized_dir)) {
         if (!class_entry.is_directory()) continue;
@@ -186,6 +191,50 @@ HBondPatterns::HBondPatterns(std::filesystem::path idealized_dir,
         }
         if (!seq_table.empty()) template_table_[lw] = std::move(seq_table);
     }
+}
+
+void HBondPatterns::save_cache(const std::filesystem::path& path) const {
+    nlohmann::json root = nlohmann::json::object();
+    for (const auto& [lw, seq_table] : template_table_) {
+        nlohmann::json classes = nlohmann::json::object();
+        for (const auto& [seq, pats] : seq_table) {
+            nlohmann::json arr = nlohmann::json::array();
+            for (const auto& [donor, acceptor] : pats)
+                arr.push_back(nlohmann::json::array({donor, acceptor}));
+            classes[seq] = std::move(arr);
+        }
+        root[lw] = std::move(classes);
+    }
+    std::ofstream out(path);
+    out << root.dump(2) << "\n";
+}
+
+bool HBondPatterns::load_cache(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+    nlohmann::json root;
+    try {
+        in >> root;
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+    if (!root.is_object()) return false;
+
+    decltype(template_table_) table;
+    for (auto lw_it = root.begin(); lw_it != root.end(); ++lw_it) {
+        if (!lw_it->is_object()) return false;
+        for (auto seq_it = lw_it->begin(); seq_it != lw_it->end(); ++seq_it) {
+            if (!seq_it->is_array()) return false;
+            std::vector<HBondPattern> pats;
+            for (const auto& pair : *seq_it) {
+                if (!pair.is_array() || pair.size() != 2) return false;
+                pats.emplace_back(pair[0].get<std::string>(), pair[1].get<std::string>());
+            }
+            table[lw_it.key()][seq_it.key()] = std::move(pats);
+        }
+    }
+    template_table_ = std::move(table);
+    return true;
 }
 
 std::vector<HBondPattern> HBondPatterns::get_expected_hbonds(const std::string& lw_class,

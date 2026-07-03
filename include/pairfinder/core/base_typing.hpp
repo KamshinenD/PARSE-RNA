@@ -26,7 +26,11 @@ class BaseTyping {
 public:
     /// Builds the curated maps and extends from the ligand DB at @p ligand_db_path
     /// (silently skipped if unreadable, matching the Python import-time behavior).
-    explicit BaseTyping(const std::filesystem::path& ligand_db_path);
+    /// @param use_cache when true, load the precomputed ``base_typing_cache.json``
+    ///   from the ligand DB's directory instead of parsing the 1.5 MB DB (an exact
+    ///   serialization of ``extended_``); falls back to parsing when it is missing.
+    ///   Pass false to force a fresh parse (used to regenerate the cache).
+    explicit BaseTyping(const std::filesystem::path& ligand_db_path, bool use_cache = true);
 
     /// Normalize a residue name to its parent base (single letter for known
     /// nucleotides; original name for unrecognized ligands).
@@ -39,7 +43,15 @@ public:
     /// or "" if unknown. Mirrors GLYCOSIDIC_N with the normalize fallback.
     std::string glycosidic_n_name(std::string_view base_type) const;
 
+    /// Serialize ``extended_`` (the DB-derived name->parent map) to JSON, so it
+    /// can be reloaded without re-parsing the ligand DB.
+    void save_cache(const std::filesystem::path& path) const;
+
 private:
+    /// Populate ``extended_`` from a cache file; false (table untouched) if the
+    /// file is absent or malformed, so the caller parses the DB instead.
+    bool load_cache(const std::filesystem::path& path);
+
     std::unordered_map<std::string, std::string> extended_;  ///< from ligand DB
 };
 

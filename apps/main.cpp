@@ -23,8 +23,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <pairfinder/algorithms/hbond/chemistry.hpp>
 #include <pairfinder/algorithms/hbond/finder.hpp>
+#include <pairfinder/algorithms/hbond_patterns.hpp>
 #include <pairfinder/algorithms/rigid_body.hpp>
+#include <pairfinder/core/base_typing.hpp>
 #include <pairfinder/core/reference_frame.hpp>
 #include <pairfinder/geometry/vector3d.hpp>
 #include <pairfinder/pipeline.hpp>
@@ -396,6 +399,35 @@ int main(int argc, char** argv) {
     if (args[0] == "classify-suite") {
         if (args.size() < 8) { std::cerr << "classify-suite: need 7 angles\n"; return 1; }
         return pfcli::classify_suite(std::vector<std::string>(args.begin() + 1, args.begin() + 8));
+    }
+    // Regenerate the precomputed resource caches (H-bond patterns from the
+    // idealized templates; base-typing + H-bond-chemistry tables from the ligand
+    // DB) so the runtime use_cache paths avoid re-parsing them every startup.
+    // `parse dump-caches [resources_root]`: with a root, writes into that source
+    // tree; otherwise into the resolved (staged) resource locations.
+    if (args[0] == "dump-caches" || args[0] == "dump-hbond-patterns") {
+        using namespace pairfinder;
+        const auto cfg = pfcli::cli_pipeline_config();
+        const std::filesystem::path cfg_dir = std::filesystem::path(cfg.ligand_db).parent_path();
+        std::filesystem::path patterns_out = std::filesystem::path(cfg.idealized_dir) /
+                                             "hbond_patterns_cache.json";
+        std::filesystem::path typing_out = cfg_dir / "base_typing_cache.json";
+        std::filesystem::path chem_out = cfg_dir / "hbond_chemistry_cache.json";
+        if (args.size() >= 2) {  // explicit resources root (source tree)
+            const std::filesystem::path root = args[1];
+            patterns_out = root / "basepair-idealized" / "hbond_patterns_cache.json";
+            typing_out = root / "config" / "base_typing_cache.json";
+            chem_out = root / "config" / "hbond_chemistry_cache.json";
+        }
+        algorithms::hbond::HBondChemistry chem(cfg.ligand_db, /*use_cache=*/false);
+        algorithms::classification::HBondPatterns patterns(cfg.idealized_dir, chem,
+                                                           /*use_cache=*/false);
+        core::BaseTyping typing(cfg.ligand_db, /*use_cache=*/false);
+        patterns.save_cache(patterns_out);
+        typing.save_cache(typing_out);
+        chem.save_cache(chem_out);
+        std::cerr << "wrote " << patterns_out << ", " << typing_out << ", " << chem_out << "\n";
+        return 0;
     }
 
     // Default: `parse <pdb-id | structure-file> [options]` runs the full

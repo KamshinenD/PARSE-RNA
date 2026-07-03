@@ -50,10 +50,18 @@ class HBondChemistry {
 public:
     /// Builds the standard tables, then extends capacities from the ligand DB
     /// at @p ligand_db_path (silently skipped if the file is unreadable).
-    explicit HBondChemistry(const std::filesystem::path& ligand_db_path);
+    /// @param use_cache when true, load the precomputed ``hbond_chemistry_cache.json``
+    ///   (an exact serialization of the donor/acceptor capacity tables) from the
+    ///   ligand DB's directory instead of parsing the 1.5 MB DB; falls back to
+    ///   parsing when it is missing. Pass false to force a fresh parse.
+    explicit HBondChemistry(const std::filesystem::path& ligand_db_path, bool use_cache = true);
 
     std::optional<int> donor_capacity(const std::string& base, const std::string& atom) const;
     std::optional<int> acceptor_capacity(const std::string& base, const std::string& atom) const;
+
+    /// Serialize the donor/acceptor capacity tables to JSON, so they can be
+    /// reloaded without re-parsing the ligand DB.
+    void save_cache(const std::filesystem::path& path) const;
 
     /// Predicted H slots for a donor atom (empty if not a donor / atom missing).
     std::vector<HbSlot> predict_h_slots(const std::string& base, const std::string& atom,
@@ -70,6 +78,10 @@ public:
 
 private:
     static std::string key(const std::string& base, const std::string& atom);
+
+    /// Populate the capacity tables from a cache file; false (tables untouched)
+    /// if absent or malformed, so the caller parses the DB instead.
+    bool load_cache(const std::filesystem::path& path);
 
     std::unordered_map<std::string, int> donor_cap_;
     std::unordered_map<std::string, int> acceptor_cap_;

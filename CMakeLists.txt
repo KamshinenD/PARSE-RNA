@@ -98,12 +98,17 @@ target_link_libraries(parse PRIVATE pairfinder_core)
 # "support/cli_support.hpp" / "differential/differential_commands.hpp" (no ../ paths).
 target_include_directories(parse PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
 
-# Make the build tree self-contained: copy resources/ next to the binary so the
-# exe-relative locator finds it (build/<cfg>/resources or build/resources).
+# After each build: (1) regenerate the precomputed resource caches (H-bond
+# patterns from the idealized templates, plus base-typing + H-bond-chemistry
+# tables from the ligand DB) so they can never go stale, then (2) copy resources/
+# next to the binary so the exe-relative locator finds it (build/<cfg>/resources).
+# Step 1 writes into the source tree (output is deterministic, so it only changes
+# when the underlying data does) and step 2 stages the fresh copies for the build.
 add_custom_command(TARGET parse POST_BUILD
+    COMMAND parse dump-caches "${CMAKE_CURRENT_SOURCE_DIR}/resources"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:parse>/resources"
-    COMMENT "Staging bundled resources next to parse")
+    COMMENT "Regenerating resource caches + staging bundled resources next to parse")
 
 # ---- Install ----------------------------------------------------------------
 # Installed layout: <prefix>/bin/parse + <prefix>/share/parse/resources

@@ -28,7 +28,12 @@ using HBondPattern = std::pair<std::string, std::string>;  // (donor_atom, accep
 class HBondPatterns {
 public:
     /// @param idealized_dir basepair-idealized root; @param chem for geometric fallback.
-    HBondPatterns(std::filesystem::path idealized_dir, const hbond::HBondChemistry& chem);
+    /// @param use_cache when true, load the precomputed ``hbond_patterns_cache.json``
+    ///   from @p idealized_dir if present (an exact serialization of the scanned
+    ///   table), falling back to scanning the .pdb files when it is missing or
+    ///   unreadable. Pass false to force a fresh scan (used to regenerate the cache).
+    HBondPatterns(std::filesystem::path idealized_dir, const hbond::HBondChemistry& chem,
+                  bool use_cache = true);
 
     /// Expected H-bonds for (lw_class, sequence): template patterns first, then
     /// the curated dict. Sequence is normalized to its 2-letter parent form.
@@ -36,7 +41,16 @@ public:
                                                   const std::string& sequence,
                                                   const core::BaseTyping& typing) const;
 
+    /// Serialize the loaded pattern table to JSON, so it can be reloaded without
+    /// re-parsing every idealized .pdb. Written by the ``dump-hbond-patterns``
+    /// tool; consumed by the ``use_cache`` constructor path.
+    void save_cache(const std::filesystem::path& path) const;
+
 private:
+    /// Populate ``template_table_`` from a cache file. Returns false (leaving the
+    /// table untouched) if the file is absent or malformed, so the caller scans.
+    bool load_cache(const std::filesystem::path& path);
+
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<HBondPattern>>>
         template_table_;
 };
