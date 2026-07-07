@@ -902,15 +902,15 @@ def parse_dump(path=None, _self=None):
     This is exactly the JSON the last parse_score computed (every pair with its
     score, issues, geometry and rigid-body params, plus the structure-level
     scores) -- including any coordinate edits you re-scored. Nothing is written
-    unless you call this. Default path: 'pairs/<object>_pairs.json' (the pairs/
-    folder is created if it does not exist).
+    unless you call this. Default path: '<object>_pairs.json' in the current
+    directory; pass any name or path to put it wherever you like.
     """
     import json
     import os
     if _SCORED_DATA is None or _SCORED_OBJ is None:
         print("PARSE: nothing scored - run parse_score first")
         return
-    path = str(path) if path else os.path.join("pairs", f"{_SCORED_OBJ}_pairs.json")
+    path = str(path) if path else f"{_SCORED_OBJ}_pairs.json"
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
