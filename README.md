@@ -81,7 +81,7 @@ The basic form is `parse <input> [options]`, where `<input>` is either a
 # by PDB ID (downloaded + cached under ~/.cache/parse)
 parse 1EHZ
 
-# save to a file — bare --out uses the PDB id → pairs/1EHZ.json
+# save to a file — bare --out uses the PDB id → ./1EHZ.json
 parse 1EHZ --out
 
 # from a local file (no download) — just the name if it's in the current
@@ -98,9 +98,11 @@ parse 7K00 --out
 | you run | JSON goes to |
 |---|---|
 | no `--out` | **stdout** (redirect with `> file.json` if you like) |
-| `--out` (no name) | **`pairs/<PDB_id>.json`** — e.g. `parse 1GID --out` → `pairs/1GID.json` (folder auto-created) |
-| `--out name.json` (bare name) | **`pairs/name.json`** |
+| `--out` (no name) | **`<PDB_id>.json` in the current directory** — e.g. `parse 1GID --out` → `./1GID.json` |
+| `--out name.json` (bare name) | **`./name.json`** (current directory) |
 | `--out path/to/name.json` (has a directory) | exactly that path (created if needed) |
+
+The output goes exactly where you point it — no folder is imposed.
 
 Downloaded structures are cached in **`~/.cache/parse/`** — nothing is
 written into your working directory unless you ask for it.
@@ -109,7 +111,7 @@ written into your working directory unless you ask for it.
 
 | Option | Effect |
 |---|---|
-| `--out [FILE]` | write JSON to a file (default: stdout). Bare `--out` → `pairs/<PDB_id>.json`; a bare name → `pairs/<name>`; a path is used as given |
+| `--out [FILE]` | write JSON to a file (default: stdout). Bare `--out` → `<PDB_id>.json` in the current directory; any name or path you give is used exactly as-is |
 | `--details` | include extra per-pair fields (template RMSD, score breakdown) |
 | `--no-score` | find + classify only, skip quality scoring |
 | `--no-download` | never fetch from RCSB; only use a local file |
@@ -152,6 +154,38 @@ A JSON object per structure:
   `is_ambiguous: true` means the edge assignment is genuinely undetermined
   (the same cases DSSR marks with a `.`).
 
+### Backbone recommendations (`backbone_residues`)
+
+When scoring is on, the output also carries a **`backbone_residues`** array — one
+entry per residue whose backbone is flagged (residues that score fine are
+omitted). The suiteness *score* is unchanged; this is a refinement-facing
+decomposition of *which* suite torsions are off and *where they should go*:
+
+```jsonc
+{
+  "res_id": "B-U-259",
+  "suiteness": 0.443,
+  "tier": "fixable",                 // fixable | review | flag_only
+  "target_conformer": "1a",          // Richardson rotamer to aim for
+  "deviations": [                    // only the torsions that "fire" (ProSco < 5)
+    { "angle": "epsilon_prev", "value": 248.5, "target": 212.3, "gap": 36.3, "prosco": 1.41 }
+  ]
+}
+```
+
+- **`tier`** — `fixable`: low suiteness with ≥1 anomalous torsion → rotate the
+  listed `deviations` toward `target_conformer`. `review`: low suiteness but no
+  single anomalous torsion (jointly distorted → a full-rebuild candidate;
+  `deviations` empty). `flag_only`: an outlier that fits no rotamer (the nearest
+  conformer is only a hint).
+- **`deviations`** — each suite torsion that is genuinely rare for its conformer
+  (`prosco` < 5, lower = more anomalous), most-anomalous first, given as
+  `value → target` (the rotation to apply) with the signed `gap` (degrees).
+- A flagged torsion is a **statistical anomaly worth reviewing against the map**,
+  not a guaranteed error — rare conformations do occur in good structures. The
+  `prosco` value is the confidence signal (deep, e.g. < 1, is more likely a real
+  error than a borderline 3–5).
+
 ---
 
 ## 5. Optional: PyMOL viewer
@@ -164,7 +198,7 @@ parse-view 1GID        # a PDB id
 parse-view file.cif    # or a local file
 ```
 
-This also writes the scored JSON to `pairs/1GID_pairs.json`.
+This also writes the scored JSON to `1GID_pairs.json` in the current directory.
 
 ### Commands inside PyMOL
 
@@ -180,7 +214,7 @@ command line). Arguments in `[...]` are optional.
 | `parse_info [selection]` | inspect a clicked/selected residue → jump the worklist to its pair |
 | `parse_overview` | zoom back out to the whole-structure overview |
 | `parse_ideal [on\|off]` | overlay the **idealized** target geometry of the current pair (green ghost) so you can see how to fix it; sticky toggle, default off |
-| `parse_dump` | write the scored pairs (incl. any coordinate edits) to `pairs/<obj>_pairs.json` |
+| `parse_dump [path]` | write the scored pairs (incl. any coordinate edits) to `<obj>_pairs.json` in the current directory, or a path you give |
 | `parse_load <path>` | rebuild the worklist from a `parse_dump` JSON — **no binary, no re-scoring** (for sharing a scored session) |
 | `parse_keys [on\|off]` | bind/unbind arrow-key navigation |
 | `parse_clear` | remove every overlay and reset |
