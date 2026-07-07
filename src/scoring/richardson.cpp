@@ -51,6 +51,7 @@ struct Conformer {
 struct RichardsonClassifier::Impl {
     std::vector<Conformer> conformers;
     std::unordered_map<std::string, std::vector<int>> by_bin;
+    std::unordered_map<std::string, int> by_name;
     Widths normal{}, satellite{};
     std::unordered_map<std::string, Widths> sat_widths_ov;
     std::unordered_map<std::string, Widths> dom_widths_ov;
@@ -125,7 +126,9 @@ RichardsonClassifier::RichardsonClassifier(const std::filesystem::path& path)
         const auto& ang = c["angles"];
         for (int k = 0; k < 7; ++k) cf.angles[k] = ang[k].get<double>();
         cf.dominance = c.value("dominance", std::string("ord"));
-        impl_->by_bin[cf.bin].push_back(static_cast<int>(impl_->conformers.size()));
+        const int idx = static_cast<int>(impl_->conformers.size());
+        impl_->by_bin[cf.bin].push_back(idx);
+        impl_->by_name[cf.name] = idx;
         impl_->conformers.push_back(std::move(cf));
     }
     impl_->normal = to_widths(d["widths"]["normal"]);
@@ -154,21 +157,31 @@ RichardsonClassifier::RichardsonClassifier(const std::filesystem::path& path)
 RichardsonClassifier::~RichardsonClassifier() = default;
 RichardsonClassifier::RichardsonClassifier(RichardsonClassifier&&) noexcept = default;
 
-double RichardsonClassifier::suiteness(const std::array<double, 7>& suite) const {
+double signed_angle_gap(double value, double center) {
+    double d = std::fmod(value - center + 180.0, 360.0);
+    if (d < 0.0) d += 360.0;
+    return d - 180.0;
+}
+
+SuiteResult RichardsonClassifier::classify(const std::array<double, 7>& suite) const {
     const Impl& m = *impl_;
+    SuiteResult out;  // defaults: conformer "" -> set to "!!" on any rejection
+    out.conformer = "!!";
+    out.is_outlier = true;
+
     // Triage.
     auto chk = [](double v, const std::array<double, 2>& r) { return r[0] <= v && v <= r[1]; };
     if (!chk(suite[1], m.tri_eps) || !chk(suite[3], m.tri_alpha) ||
         !chk(suite[4], m.tri_beta) || !chk(suite[2], m.tri_zeta))
-        return 0.0;
+        return out;
     // Sieve.
     const int pdm = m.pucker(suite[0]);
     const int pd = m.pucker(suite[6]);
     const std::string g = m.gamma(suite[5]);
-    if (pdm == 0 || pd == 0 || g.empty()) return 0.0;
+    if (pdm == 0 || pd == 0 || g.empty()) return out;
     const std::string bin = std::to_string(pdm) + std::to_string(pd) + g;
     const auto it = m.by_bin.find(bin);
-    if (it == m.by_bin.end() || it->second.empty()) return 0.0;
+    if (it == m.by_bin.end() || it->second.empty()) return out;
 
     // 4D screen.
     double best_d4 = std::numeric_limits<double>::infinity();
@@ -179,15 +192,45 @@ double RichardsonClassifier::suiteness(const std::array<double, 7>& suite) const
         const double d4 = l3_distance(suite, m.conformers[ci].angles, w, 1, 5);
         if (d4 < best_d4) { best_d4 = d4; best = ci; best_w = w; }
     }
-    if (best < 0 || best_d4 >= 1.0) return 0.0;
+    if (best < 0 || best_d4 >= 1.0) return out;
 
     // 7D test.
     const double d7 = l3_distance(suite, m.conformers[best].angles, best_w, 0, 7);
-    if (d7 > 1.0) return 0.0;
+    if (d7 > 1.0) return out;
 
     double s = (std::cos(kPi * d7) + 1.0) / 2.0;
     if (s < 0.01) s = 0.01;
-    return std::round(s * 1000.0) / 1000.0;
+    out.conformer = m.conformers[best].name;
+    out.suiteness = std::round(s * 1000.0) / 1000.0;
+    out.is_outlier = false;
+    out.distance = d7;
+    return out;
+}
+
+double RichardsonClassifier::suiteness(const std::array<double, 7>& suite) const {
+    return classify(suite).suiteness;
+}
+
+const std::array<double, 7>* RichardsonClassifier::center_for(
+    const std::string& conformer) const {
+    const auto it = impl_->by_name.find(conformer);
+    return it == impl_->by_name.end() ? nullptr : &impl_->conformers[it->second].angles;
+}
+
+std::string RichardsonClassifier::nearest_conformer(
+    const std::array<double, 7>& suite) const {
+    std::string best_name;
+    double best_d = std::numeric_limits<double>::infinity();
+    for (const auto& c : impl_->conformers) {
+        double d = 0.0;
+        for (int k = 0; k < 7; ++k) d += angle_diff(suite[k], c.angles[k]);
+        if (d < best_d) { best_d = d; best_name = c.name; }
+    }
+    return best_name;
+}
+
+const std::array<double, 7>& RichardsonClassifier::normal_widths() const {
+    return impl_->normal;
 }
 
 }  // namespace pairfinder::scoring

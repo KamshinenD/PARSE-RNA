@@ -232,6 +232,27 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         out["overall_score"] = round_to(ss.overall, 2);
         out["pairs_score"] = round_to(ss.pairs_score, 2);
         out["backbone_score"] = round_to(ss.residues_score, 2);
+        // Per-residue backbone recommendations (flagged residues only): which
+        // torsions to correct toward which conformer. Suiteness stays the score.
+        json backbone_residues = json::array();
+        for (const auto& rs : ss.residue_scores) {
+            if (!rs.recommendation) continue;
+            const auto& rec = *rs.recommendation;
+            json devs = json::array();
+            for (const auto& d : rec.deviations) {
+                json jd = {{"angle", d.angle}, {"value", round_to(d.value, 1)},
+                           {"target", round_to(d.target, 1)}, {"gap", round_to(d.gap, 1)}};
+                if (d.prosco) jd["prosco"] = round_to(*d.prosco, 2);
+                devs.push_back(std::move(jd));
+            }
+            backbone_residues.push_back(json{
+                {"res_id", rs.res_id},
+                {"suiteness", round_to(rs.suiteness, 3)},
+                {"tier", rec.tier},
+                {"target_conformer", rec.target_conformer},
+                {"deviations", std::move(devs)}});
+        }
+        out["backbone_residues"] = std::move(backbone_residues);
         if (details) {
             // Group by human-readable category names — mirrors Python issue_summary().
             json summary = json::object();

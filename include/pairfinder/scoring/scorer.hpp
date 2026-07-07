@@ -50,11 +50,33 @@ struct PairScore {
     std::vector<IssuePenalty> issues;  ///< triggered issues, sorted by descending penalty
 };
 
+/// One suite torsion flagged as genuinely off its target conformer. Reported
+/// only when it *fires*: ProSco below the Preferred cutoff (5) against the
+/// empirical per-conformer distribution. No Z'/penalty — suiteness is the score.
+struct AngleDeviation {
+    std::string angle;              ///< suite dihedral name (alpha .. delta_prev)
+    double value = 0.0;             ///< measured angle, degrees
+    double target = 0.0;            ///< conformer-center angle, degrees
+    double gap = 0.0;               ///< signed measured − target, degrees
+    std::optional<double> prosco;   ///< density percentile (lower = more anomalous)
+};
+
+/// Refinement-facing backbone recommendation for one residue (mirror of Python
+/// BackboneRecommendation). tier: "fixable" (≥1 firing torsion, correct these) /
+/// "review" (low suiteness but no firing torsion — jointly distorted, rebuild) /
+/// "flag_only" (outlier, nearest conformer is only a hint).
+struct BackboneRecommendation {
+    std::string tier;
+    std::string target_conformer;
+    std::vector<AngleDeviation> deviations;
+};
+
 /// Per-residue backbone score (suiteness * 100).
 struct ResidueScore {
     std::string res_id;
     double suiteness = 0.0;
     double score = 0.0;
+    std::optional<BackboneRecommendation> recommendation;  ///< none for ok residues
 };
 
 /// Whole-structure score.

@@ -41,6 +41,10 @@ constexpr double kProscoPreferred  = 5.0;   // ProSco >= 5 -> Preferred, severit
 constexpr double kZprimeThreshold  = 5.0;   // |Z'| = 5 -> severity = 1
 constexpr double kPi = 3.14159265358979323846;
 
+// Backbone recommendation thresholds (mirror backbone_scorer.py).
+constexpr double kLowSuitenessMax     = 0.5;  // suiteness below -> residue flagged
+constexpr double kFallbackWidthFactor = 1.0;  // no ProSco cell -> fires beyond 1 width
+
 const std::unordered_set<std::string> kBaseAtoms = {
     "N1", "N2", "N3", "N4", "N6", "N7", "N9", "O2", "O4", "O6"};
 const std::unordered_set<std::string> kSelfReciprocal = {
@@ -173,6 +177,7 @@ struct Scorer::Impl {
     json prosco;       // prosco_distributions
     json z_tables;     // z_tables (pairs + hbonds, from z_tables.json)
     json categorical;  // categorical_distributions
+    json bb_prosco;    // backbone prosco_distributions["backbone"] (per-conformer torsion)
     std::unordered_map<std::string, double> pair_weights;
     double w_pairs = 0.5, w_residues = 0.5;
     std::unique_ptr<RichardsonClassifier> richardson;
@@ -252,6 +257,77 @@ struct Scorer::Impl {
         if (canonical <= 0 || actual >= canonical) return 0.0;
         return static_cast<double>(canonical - actual) / canonical;
     }
+
+    // --- backbone recommendation (per-conformer ProSco; mirror backbone_scorer.py) ---
+
+    /// ProSco of a suite torsion against its empirical per-conformer cell, with
+    /// circular unwrap onto the branch used at build time (unwrap_center).
+    std::optional<double> bb_prosco_lookup(const std::string& angle,
+                                           const std::string& conformer,
+                                           double value) const {
+        if (conformer.empty() || bb_prosco.is_null()) return std::nullopt;
+        const auto ait = bb_prosco.find(angle);
+        if (ait == bb_prosco.end()) return std::nullopt;
+        const auto cit = ait->find(conformer);
+        if (cit == ait->end()) return std::nullopt;
+        const json& cell = *cit;
+        if (!cell.contains("prosco_per_bin") || cell["prosco_per_bin"].empty())
+            return std::nullopt;
+        const double uc = cell["unwrap_center"].get<double>();
+        const double vu = uc + signed_angle_gap(value, uc);
+        const double lo = cell["support_lo"].get<double>();
+        const double hi = cell["support_hi"].get<double>();
+        const int n = cell["n_bins"].get<int>();
+        int idx = static_cast<int>((vu - lo) / (hi - lo) * n);
+        idx = std::max(0, std::min(n - 1, idx));
+        return cell["prosco_per_bin"][idx].get<double>();
+    }
+
+    /// Per-residue backbone recommendation. deviations = only torsions that fire
+    /// (ProSco < 5), ranked most-anomalous first. tier fixable / review / flag_only.
+    std::optional<BackboneRecommendation> build_recommendation(
+            const std::array<double, 7>& suite, const SuiteResult& sr) const {
+        std::string tier, target;
+        if (sr.is_outlier) {
+            tier = "flag_only";
+            target = richardson->nearest_conformer(suite);
+        } else if (sr.suiteness < kLowSuitenessMax) {
+            tier = "fixable";
+            target = sr.conformer;
+        } else {
+            return std::nullopt;
+        }
+        BackboneRecommendation rec;
+        rec.target_conformer = target;
+        const std::array<double, 7>* center =
+            target.empty() ? nullptr : richardson->center_for(target);
+        if (center) {
+            const auto& widths = richardson->normal_widths();
+            for (int k = 0; k < 7; ++k) {
+                const double val = suite[k];
+                const double gap = signed_angle_gap(val, (*center)[k]);
+                const std::string angle = kSuiteAngleNames[k];
+                const std::optional<double> ps = bb_prosco_lookup(angle, target, val);
+                const bool fires = ps ? (*ps < kProscoPreferred)
+                                      : (std::abs(gap) > kFallbackWidthFactor * widths[k]);
+                if (fires) {
+                    AngleDeviation d;
+                    d.angle = angle; d.value = val; d.target = (*center)[k];
+                    d.gap = gap; d.prosco = ps;
+                    rec.deviations.push_back(std::move(d));
+                }
+            }
+            std::sort(rec.deviations.begin(), rec.deviations.end(),
+                      [](const AngleDeviation& a, const AngleDeviation& b) {
+                          const double ka = a.prosco ? *a.prosco : 1000.0 - std::abs(a.gap);
+                          const double kb = b.prosco ? *b.prosco : 1000.0 - std::abs(b.gap);
+                          return ka < kb;
+                      });
+        }
+        if (tier == "fixable" && rec.deviations.empty()) tier = "review";
+        rec.tier = tier;
+        return rec;
+    }
 };
 
 Scorer::Scorer(const std::filesystem::path& distributions_path,
@@ -276,6 +352,18 @@ Scorer::Scorer(const std::filesystem::path& distributions_path,
         if (std::filesystem::exists(z_path)) {
             std::ifstream in(z_path);
             impl_->z_tables = json::parse(in);
+        }
+    }
+    // Auto-discover backbone_prosco_distributions.json (per-conformer torsion
+    // ProSco used for backbone recommendations; mirrors Python scorer).
+    {
+        const auto bb_path = prosco_path.parent_path() / "backbone_prosco_distributions.json";
+        if (std::filesystem::exists(bb_path)) {
+            std::ifstream in(bb_path);
+            json d = json::parse(in);
+            if (d.contains("prosco_distributions") &&
+                d["prosco_distributions"].contains("backbone"))
+                impl_->bb_prosco = d["prosco_distributions"]["backbone"];
         }
     }
     {
@@ -522,8 +610,8 @@ StructureScore Scorer::score_structure(
         if (is_dna_residue(rid)) continue;  // RNA-only backbone score (see helper)
         const auto suite = build_suite(rid, tors, pred_index);
         if (!suite) continue;
-        const double suiteness = impl_->richardson->suiteness(*suite);
-        if (suiteness <= 0.0) {
+        const SuiteResult sr = impl_->richardson->classify(*suite);
+        if (sr.suiteness <= 0.0) {
             // L-RNA enantiomer check: a rejected suite may be mirror-image RNA
             // (e.g. a Spiegelmer aptamer). Negate every torsion (360 - t) and
             // re-classify; if the mirror fits a D-RNA cluster it is L-RNA —
@@ -537,9 +625,10 @@ StructureScore Scorer::score_structure(
         }
         ResidueScore rs;
         rs.res_id   = rid;
-        rs.suiteness = suiteness;
-        rs.score    = std::max(0.0, std::min(100.0, suiteness * 100.0));
-        ss.residue_scores.push_back(rs);
+        rs.suiteness = sr.suiteness;
+        rs.score    = std::max(0.0, std::min(100.0, sr.suiteness * 100.0));
+        rs.recommendation = impl_->build_recommendation(*suite, sr);
+        ss.residue_scores.push_back(std::move(rs));
     }
 
     auto mean = [](const auto& v, auto getter) {
