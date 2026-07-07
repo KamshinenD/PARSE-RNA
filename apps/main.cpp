@@ -277,11 +277,10 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
     if (out_path.empty()) {
         std::cout << text << '\n';
     } else {
-        // A bare filename (no directory) is collected under ./pairs/ so output
-        // stays in one folder rather than the working directory. An explicit
-        // path (relative-with-dir or absolute) is respected as given.
+        // The output path is used exactly as the user gives it: a bare name
+        // lands in the current directory, a relative or absolute path is honored
+        // as-is. Any parent directories in the path are created if missing.
         std::filesystem::path outp(out_path);
-        if (!outp.has_parent_path()) outp = std::filesystem::path("pairs") / outp;
         std::error_code out_ec;
         if (outp.has_parent_path())
             std::filesystem::create_directories(outp.parent_path(), out_ec);
@@ -395,8 +394,9 @@ int main(int argc, char** argv) {
                   << "      find + classify + score -> JSON (stdout, or a file with --out)\n"
                   << "      a bare PDB id (e.g. 6V3A) is downloaded from RCSB and cached;\n"
                   << "      an existing .cif/.pdb(.gz) path is used directly.\n"
-                  << "  --out [FILE]  write JSON to a file; bare --out -> pairs/<id>.json,\n"
-                  << "                a bare name -> pairs/<name>, a path is used as given\n"
+                  << "  --out [FILE]  write JSON to a file (default: stdout). A bare --out\n"
+                  << "                writes <id>.json in the current directory; any name or\n"
+                  << "                path you give is used exactly as-is\n"
                   << "  options: --details  --no-score  --no-download  --cache-dir DIR\n"
                   << "  cache:   $PARSE_CACHE_DIR or ~/.cache/parse\n"
                   << "  parse dump-parse <input.pdb>   # parsed atoms (TSV)\n";
@@ -477,7 +477,7 @@ int main(int argc, char** argv) {
     try {
         const std::filesystem::path file =
             resolve_input(input, cache_dir(cache_override), allow_download);
-        // `--out` with no name defaults to <pdb_id>.json (routed into pairs/).
+        // `--out` with no name defaults to <pdb_id>.json in the current directory.
         if (out_requested && out_path.empty())
             out_path = clean_pdb_id(file.string()) + ".json";
         return find_json(file.string(), score, details, emit_classified, out_path);
