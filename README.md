@@ -129,9 +129,8 @@ A JSON object per structure:
   "candidates_total": 1234,      // pairs considered
   "candidates_valid": 200,       // passed geometric validation
   "n_pairs": 31,                 // final selected base pairs
-  "overall_score": 88.36,        // whole-RNA quality (0–100)
-  "pairs_score": 98.46,          // base-pair geometry component
-  "backbone_score": 69.57,       // backbone (suiteness) component
+  "pairs_score": 98.46,          // base-pair geometry quality (0–100)
+  "backbone_score": 69.57,       // backbone suiteness quality (0–100)
   "pairs": [
     {
       "res_id1": "A-G-1", "res_id2": "A-C-72",
@@ -148,7 +147,10 @@ A JSON object per structure:
 }
 ```
 
-- **`overall_score` = 0.65 · `pairs_score` + 0.35 · `backbone_score`.**
+- **`pairs_score` and `backbone_score` are reported separately** — they measure
+  different quality axes on different scales, so they are not blended into a single
+  "overall" number (which would over-claim whole-structure quality; clashscore, bond
+  geometry, etc. are not considered here).
 - Per-pair `score` and per-structure scores are 0–100 (higher = better geometry).
 - A `classification.lw_class` containing `|` (e.g. `cWH|cWW`) with
   `is_ambiguous: true` means the edge assignment is genuinely undetermined
