@@ -229,7 +229,12 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
     if (emit_classified) out["classified"] = std::move(classified);
 
     if (score) {
-        out["overall_score"] = round_to(ss.overall, 2);
+        // "overall_score" intentionally not emitted: pair-geometry and backbone
+        // scores live on different scales / measure different axes, and an
+        // "overall" label overclaims whole-structure quality (clashscore, bond
+        // geometry, etc. are not considered). Reported separately below.
+        // `ss.overall` is still computed; uncomment to revive.
+        // out["overall_score"] = round_to(ss.overall, 2);
         out["pairs_score"] = round_to(ss.pairs_score, 2);
         out["backbone_score"] = round_to(ss.residues_score, 2);
         // Per-residue backbone recommendations (flagged residues only): which

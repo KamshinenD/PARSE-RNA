@@ -79,9 +79,13 @@ struct ResidueScore {
     std::optional<BackboneRecommendation> recommendation;  ///< none for ok residues
 };
 
-/// Whole-structure score.
+/// Per-axis structure scores. `pairs_score` and `residues_score` are reported
+/// separately (different scales / quality axes). `overall` (w_pairs·pairs +
+/// w_residues·residues, MI-derived weights ~0.65/0.35) is still computed but
+/// intentionally not emitted by the CLI — an "overall" label overclaims
+/// whole-structure quality (clashscore, bond geometry, etc. are not considered).
 struct StructureScore {
-    double overall = 0.0;
+    double overall = 0.0;  ///< computed, not emitted (see struct doc)
     double pairs_score = 0.0;
     double residues_score = 0.0;
     int skipped_pairs = 0;  ///< selected pairs that were not scorable
