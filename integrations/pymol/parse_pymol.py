@@ -408,8 +408,7 @@ def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=Non
     _POS = -1
     _SCORED_OBJ = obj
     _SCORED_DATA = data                    # full JSON, written out by parse_dump
-    _STRUCT_SCORE = {                       # whole-RNA scores, shown by parse_overview
-        "overall":  data.get("overall_score"),
+    _STRUCT_SCORE = {                       # per-axis scores, shown by parse_overview
         "pairs":    data.get("pairs_score"),
         "residues": data.get("backbone_score"),
         "n_pairs":  data.get("n_pairs"),
@@ -765,8 +764,8 @@ def parse_overview(_self=None):
     def _f(x):
         return f"{x:.1f}" if isinstance(x, (int, float)) else "?"
     ss = _STRUCT_SCORE or {}
-    score_line = (f"{_SCORED_OBJ}: overall PARSE {_f(ss.get('overall'))}/100  "
-                  f"(pairs {_f(ss.get('pairs'))}, backbone {_f(ss.get('residues'))})  "
+    score_line = (f"{_SCORED_OBJ}: PARSE pairs {_f(ss.get('pairs'))}/100, "
+                  f"backbone {_f(ss.get('residues'))}/100  "
                   f"— {len(_QUEUE)} flagged pair(s)")
     print(f"PARSE: overview — {score_line}")
     _set_hud(cmd, f"PARSE overview   {score_line}   (→ parse_next to step through)")
@@ -954,7 +953,6 @@ def parse_load(path, _self=None):
     _QUEUE = build_queue(flagged_pairs(data))
     _POS = -1
     _STRUCT_SCORE = {
-        "overall":  data.get("overall_score"),
         "pairs":    data.get("pairs_score"),
         "residues": data.get("backbone_score"),
         "n_pairs":  data.get("n_pairs"),
