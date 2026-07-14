@@ -57,6 +57,26 @@ inline std::string pair_tier(double score) {
     return "Review";
 }
 
+/// Report-only "unusual sugar pucker": a C2'-endo (by δ) sugar in a helical cWW
+/// G-C/A-U pair, where A-form helices are C3'-endo. `pperp_confirms` = the Pperp
+/// geometry also reads C2'-endo (genuine, atypical-but-real) vs C3'-endo (ring
+/// likely mis-modeled → really a pucker OUTLIER). Does NOT affect the score.
+struct UnusualPucker {
+    std::string res_id;
+    std::optional<double> delta;
+    std::optional<double> pperp;
+    bool pperp_confirms = false;
+};
+
+/// Report-only sugar-pucker OUTLIER: the δ-derived pucker disagrees with the
+/// Pperp-derived pucker (a mis-modeled ribose ring). Does NOT affect the score.
+struct PuckerOutlier {
+    double pperp = 0.0;
+    std::optional<double> delta;
+    std::string pucker_by_pperp;   ///< "C3'-endo" / "C2'-endo"
+    std::string pucker_by_delta;
+};
+
 /// Per-pair scoring result.
 struct PairScore {
     std::string res_id1, res_id2;
@@ -64,6 +84,7 @@ struct PairScore {
     double score = 0.0;
     double penalty = 0.0;
     std::vector<IssuePenalty> issues;  ///< triggered issues, sorted by descending penalty
+    std::vector<UnusualPucker> unusual_pucker;  ///< report-only (helical C2'-endo)
 
     /// Triage tier derived from `score` (Preferred/Acceptable/Review).
     std::string tier() const { return pair_tier(score); }
@@ -96,6 +117,9 @@ struct ResidueScore {
     double suiteness = 0.0;
     double score = 0.0;
     std::optional<BackboneRecommendation> recommendation;  ///< none for ok residues
+    std::optional<double> delta;    ///< δ torsion (ring-based pucker signal)
+    std::optional<double> pperp;    ///< base-phosphate perpendicular distance (Å)
+    std::optional<PuckerOutlier> pucker_outlier;  ///< set only when δ/Pperp disagree
 };
 
 /// Per-axis structure scores. `pairs_score` and `residues_score` are reported

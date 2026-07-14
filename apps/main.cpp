@@ -218,6 +218,20 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                 }
                 p["issues"] = std::move(iss);
                 p["issue_details"] = std::move(details);
+                // Report-only "unusual sugar pucker" (helical cWW C2'-endo).
+                if (!it->second->unusual_pucker.empty()) {
+                    json ups = json::array();
+                    for (const auto& u : it->second->unusual_pucker) {
+                        ups.push_back(json{
+                            {"res_id", u.res_id},
+                            {"pucker", "C2'-endo"},
+                            {"expected", "C3'-endo"},
+                            {"delta", u.delta ? json(round_to(*u.delta, 1)) : json(nullptr)},
+                            {"pperp", u.pperp ? json(round_to(*u.pperp, 2)) : json(nullptr)},
+                            {"pperp_confirms", u.pperp_confirms}});
+                    }
+                    p["unusual_pucker"] = std::move(ups);
+                }
             } else {
                 p["score"] = nullptr;
                 p["tier"] = nullptr;
@@ -270,6 +284,19 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                 {"deviations", std::move(devs)}});
         }
         out["backbone_residues"] = std::move(backbone_residues);
+        // Report-only ribose pucker OUTLIERS (δ disagrees with Pperp), structure-level.
+        json pucker_outliers = json::array();
+        for (const auto& rs : ss.residue_scores) {
+            if (!rs.pucker_outlier) continue;
+            const auto& o = *rs.pucker_outlier;
+            pucker_outliers.push_back(json{
+                {"res_id", rs.res_id},
+                {"pperp", round_to(o.pperp, 2)},
+                {"delta", o.delta ? json(round_to(*o.delta, 1)) : json(nullptr)},
+                {"pucker_by_pperp", o.pucker_by_pperp},
+                {"pucker_by_delta", o.pucker_by_delta}});
+        }
+        if (!pucker_outliers.empty()) out["pucker_outliers"] = std::move(pucker_outliers);
         if (details) {
             // Group by human-readable category names — mirrors Python issue_summary().
             json summary = json::object();
