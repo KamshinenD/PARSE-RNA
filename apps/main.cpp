@@ -200,6 +200,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             const auto it = score_by_key.find(sc.res_id1 + '\x01' + sc.res_id2);
             if (it != score_by_key.end()) {
                 p["score"] = round_to(it->second->score, 2);
+                p["tier"] = it->second->tier();
                 // Issues as a list of key strings — mirrors Python's
                 // [ip.issue for ip in ps.issues] in finder.py.
                 json iss = json::array();
@@ -219,6 +220,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                 p["issue_details"] = std::move(details);
             } else {
                 p["score"] = nullptr;
+                p["tier"] = nullptr;
                 p["issues"] = json::array();
                 p["issue_details"] = json::array();
             }
@@ -237,6 +239,14 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         // out["overall_score"] = round_to(ss.overall, 2);
         out["pairs_score"] = round_to(ss.pairs_score, 2);
         out["backbone_score"] = round_to(ss.residues_score, 2);
+        // Pair triage tier counts (Preferred/Acceptable/Review) — mirror of
+        // Python StructureScore.tier_summary(). Always all three keys.
+        const auto ts = ss.tier_summary();
+        const json tier_summary = json{
+            {"Preferred", ts.preferred},
+            {"Acceptable", ts.acceptable},
+            {"Review", ts.review}};
+        out["tier_summary"] = tier_summary;
         // Per-residue backbone recommendations (flagged residues only): which
         // torsions to correct toward which conformer. Suiteness stays the score.
         json backbone_residues = json::array();
@@ -271,6 +281,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             out["score_details"] = json{
                 {"pairs_score", round_to(ss.pairs_score, 2)},
                 {"backbone_score", round_to(ss.residues_score, 2)},
+                {"tier_summary", tier_summary},
                 {"issue_summary", summary},
                 {"n_scored_pairs", static_cast<int>(ss.pair_scores.size())},
                 {"n_residues_scored", static_cast<int>(ss.residue_scores.size())},
