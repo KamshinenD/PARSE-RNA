@@ -130,7 +130,7 @@ A JSON object per structure:
   "candidates_valid": 200,       // passed geometric validation
   "n_pairs": 31,                 // final selected base pairs
   "pairs_score": 98.46,          // base-pair geometry quality (0–100)
-  "backbone_score": 69.57,       // backbone suiteness quality (0–100)
+  "backbone_suiteness": 0.696,   // mean Richardson suiteness (0–1, wwPDB convention)
   "pairs": [
     {
       "res_id1": "A-G-1", "res_id2": "A-C-72",
@@ -147,11 +147,14 @@ A JSON object per structure:
 }
 ```
 
-- **`pairs_score` and `backbone_score` are reported separately** — they measure
-  different quality axes on different scales, so they are not blended into a single
-  "overall" number (which would over-claim whole-structure quality; clashscore, bond
-  geometry, etc. are not considered here).
-- Per-pair `score` and per-structure scores are 0–100 (higher = better geometry).
+- **`pairs_score` and `backbone_suiteness` are reported separately** — they measure
+  different quality axes, so they are not blended into a single "overall" number
+  (which would over-claim whole-structure quality; clashscore, bond geometry, etc.
+  are not considered here). Note the scales differ by design: `pairs_score` is a
+  0–100 geometry score, while `backbone_suiteness` is mean Richardson suiteness as a
+  **0–1** fraction (the wwPDB RNA-suiteness measure), reported in its native unit.
+- Per-pair `score` and `pairs_score` are 0–100 (higher = better); `backbone_suiteness`
+  is 0–1 (higher = better).
 - A `classification.lw_class` containing `|` (e.g. `cWH|cWW`) with
   `is_ambiguous: true` means the edge assignment is genuinely undetermined
   (the same cases DSSR marks with a `.`).
@@ -193,14 +196,25 @@ decomposition of *which* suite torsions are off and *where they should go*:
 ## 5. Optional: PyMOL viewer
 
 If you have **PyMOL** installed, you can open a structure, score it, and
-highlight the lowest-quality pairs in one command:
+highlight the pairs that need attention in one command:
 
 ```bash
-parse-view 1GID        # a PDB id
-parse-view file.cif    # or a local file
+parse-view 1GID              # a PDB id
+parse-view file.cif          # or a local file
+parse-view 1GID acceptable   # optional tier: review (default) | acceptable | all
 ```
 
-This also writes the scored JSON to `1GID_pairs.json` in the current directory.
+The optional **tier** selects which pairs populate the worklist, by whole-pair
+score: `review` (score < 75 — the genuinely-poor pairs, the default),
+`acceptable` (75 ≤ score < 100 — the minor-issue middle, a polishing pass), or
+`all` (both). The structure opens as a whole-view health map — gray, with the
+flagged pairs lit up — and the scored JSON is also written to
+`1GID_pairs.json` in the current directory.
+
+**Coloring** encodes the *kind* of defect: **yellow → red** for a geometric
+problem (intensity = severity of the worst parameter), and **blue** for a bonding
+problem (a missing/extra canonical H-bond), placed at the bottom of the worklist.
+Gray pairs are not flagged.
 
 ### Commands inside PyMOL
 
@@ -209,7 +223,7 @@ command line). Arguments in `[...]` are optional.
 
 | command | what it does |
 |---|---|
-| `parse_score` | score the structure + highlight all flagged pairs (worst = red) |
+| `parse_score [obj], [tier]` | score the structure + highlight the flagged pairs; `tier` = `review` (default) / `acceptable` / `all` (geometry = yellow→red, H-bond count = blue) |
 | `parse_list [n]` | print the ranked worklist of the worst pairs (default 25) |
 | `parse_next` / `parse_prev` | step through the worklist one pair at a time |
 | `parse_goto <rank \| residue>` | jump to worklist entry `12`, **or** inspect any residue by `A-169` / `A169` / `A-G-169` (even a clean pair not in the worklist) — prints its score and what's out of range |
@@ -223,9 +237,10 @@ command line). Arguments in `[...]` are optional.
 | `parse_set_binary <path>` | point the plugin at a specific `parse` binary |
 | `parse_set_ideals <path>` | set the idealized-template dir |
 
-A typical loop: `parse_score` → `parse_next` through the red pairs → `parse_ideal`
-to see the target → fix geometry / re-refine → re-run `parse_score`. Keyboard
-navigation and the color scheme are covered in
+A typical loop: `parse_score` (Review tier) → `parse_next` through the flagged
+pairs → `parse_ideal` to see the target → fix geometry / re-refine → re-run
+`parse_score`; when the Review worklist is clear, `parse_score obj, acceptable`
+to polish the middle. Keyboard navigation and the full color scheme are covered in
 [`integrations/pymol/README.md`](integrations/pymol/README.md).
 
 PyMOL is only needed for this viewer — the core `parse` tool does not require it.

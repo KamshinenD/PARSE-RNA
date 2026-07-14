@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstdlib>
 #include <functional>
-#include <limits>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -30,8 +29,6 @@ using Cand = ScoredCandidate;
 const std::unordered_set<std::string> kCanonicalSeq = {"AU", "UA", "GC", "CG", "GU", "UG"};
 
 std::string sequence(const Cand& c) { return c.res_name1 + c.res_name2; }
-
-int face_priority(char f) { return f == 'W' ? 0 : (f == 'H' ? 1 : 2); }
 
 std::vector<std::string> split_pipe(const std::string& lw) {
     std::vector<std::string> out;
@@ -131,7 +128,10 @@ std::vector<std::pair<Slot, Slot>> possible_face_slots(const std::string& lw,
 }
 
 // ---- HelixDetector (helix.py) ----
-bool pairs_consecutive(const Cand& p1, const Cand& p2, const RNAChains& ch) {
+// Kept as a faithful port reference (see the "kept as spec" note below); the
+// selection path uses the edge-set/components approach instead. [[maybe_unused]]
+// so it documents the spec without tripping -Wunused-function.
+[[maybe_unused]] bool pairs_consecutive(const Cand& p1, const Cand& p2, const RNAChains& ch) {
     const std::string& a1 = p1.res_id1;
     const std::string& a2 = p1.res_id2;
     const std::string& b1 = p2.res_id1;
