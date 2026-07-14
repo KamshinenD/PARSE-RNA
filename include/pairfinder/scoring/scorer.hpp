@@ -41,6 +41,22 @@ struct IssuePenalty {
     std::string tier;               ///< "Preferred"/"Allowed"/"Of Concern"; "" if not ProSco-scored
 };
 
+/// Pair-score triage tiers — global, data-derived cutoffs (mirror of
+/// scoring/result.py::pair_tier). Acceptable spans [75, 100); below is Review.
+constexpr double kTierAcceptableMin = 75.0;
+
+/// Triage tier for a pair score:
+///   "Preferred"  = 100     (every scored parameter in its Preferred/ProSco≥5 region)
+///   "Acceptable" = [75,100) (minor strain, no review needed)
+///   "Review"     = <75      (2.5× enriched in poorly-refined structures)
+/// Global rather than per-LW-class: all 12 LW medians are 100 and per-(class,bp)
+/// ProSco/Z' normalization already removes the "non-canonical is harder" effect.
+inline std::string pair_tier(double score) {
+    if (score >= 100.0) return "Preferred";
+    if (score >= kTierAcceptableMin) return "Acceptable";
+    return "Review";
+}
+
 /// Per-pair scoring result.
 struct PairScore {
     std::string res_id1, res_id2;
@@ -48,6 +64,9 @@ struct PairScore {
     double score = 0.0;
     double penalty = 0.0;
     std::vector<IssuePenalty> issues;  ///< triggered issues, sorted by descending penalty
+
+    /// Triage tier derived from `score` (Preferred/Acceptable/Review).
+    std::string tier() const { return pair_tier(score); }
 };
 
 /// One suite torsion flagged as genuinely off its target conformer. Reported
@@ -91,6 +110,19 @@ struct StructureScore {
     int skipped_pairs = 0;  ///< selected pairs that were not scorable
     std::vector<PairScore> pair_scores;
     std::vector<ResidueScore> residue_scores;
+
+    /// Count of scored pairs per triage tier (mirror of Python tier_summary()).
+    struct TierSummary { int preferred = 0, acceptable = 0, review = 0; };
+    TierSummary tier_summary() const {
+        TierSummary t;
+        for (const auto& ps : pair_scores) {
+            const std::string tier = ps.tier();
+            if (tier == "Preferred") ++t.preferred;
+            else if (tier == "Acceptable") ++t.acceptable;
+            else ++t.review;
+        }
+        return t;
+    }
 };
 
 class Scorer {
