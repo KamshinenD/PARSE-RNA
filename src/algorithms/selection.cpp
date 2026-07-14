@@ -510,6 +510,22 @@ std::vector<Cand*> global_optimal(const std::vector<Cand*>& input, double min_sc
 
 }  // namespace
 
+std::vector<char> helix_membership(const std::vector<ScoredCandidate>& pairs,
+                                   const RNAChains& chains) {
+    std::vector<char> in_helix(pairs.size(), 0);
+    if (pairs.empty()) return in_helix;
+    std::vector<Cand*> ptrs;
+    ptrs.reserve(pairs.size());
+    // detect_segments only reads the candidates; const_cast is safe here.
+    for (const auto& p : pairs) ptrs.push_back(const_cast<Cand*>(&p));
+    for (const auto& seg : detect_segments(ptrs, chains)) {
+        if (seg.pair_indices.size() < 2) continue;   // isolated pair: not a helix
+        for (int idx : seg.pair_indices)
+            if (idx >= 0 && idx < static_cast<int>(pairs.size())) in_helix[idx] = 1;
+    }
+    return in_helix;
+}
+
 std::vector<ScoredCandidate> select_pairs(std::vector<ScoredCandidate> candidates,
                                           const RNAChains& chains, double min_score) {
     std::vector<ScoredCandidate>& work = candidates;  // stable addresses

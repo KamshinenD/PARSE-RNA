@@ -59,6 +59,10 @@ public:
     /// Baseline per-axis tolerance widths (fallback flagging for sparse cells).
     const std::array<double, 7>& normal_widths() const;
 
+    /// Sugar pucker from a residue's δ torsion: 3 = C3'-endo, 2 = C2'-endo,
+    /// 0 = between the two sieve bands (C3' [60,105], C2' [125,165]).
+    int pucker(double delta) const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

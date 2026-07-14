@@ -25,6 +25,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <pairfinder/algorithms/rna_chains.hpp>
+#include <pairfinder/algorithms/selection.hpp>
 #include <pairfinder/scoring/pair_parameters.hpp>
 #include <pairfinder/scoring/richardson.hpp>
 #include <pairfinder/scoring/torsions.hpp>
@@ -35,6 +37,34 @@ namespace {
 
 using json = nlohmann::json;
 using geometry::Vector3d;
+
+// ---- Sugar-pucker checks (Richardson/Kapral): the base-phosphate perpendicular
+//      (Pperp) and the two report-only categories built on it. ----
+constexpr double kPperpCutoff = 2.9;   // Å: >= C3'-endo, < C2'-endo
+const std::unordered_set<std::string> kHelicalWcBp = {"G-C", "C-G", "A-U", "U-A"};
+
+/// Base-phosphate perpendicular distance (Å): perpendicular from the 3' P (the
+/// next residue's phosphorus) to the extended C1'->N glycosidic vector. Long
+/// (>=2.9) = C3'-endo, short (<2.9) = C2'-endo. nullopt if any atom is missing.
+std::optional<double> compute_pperp(const core::Residue* residue,
+                                    const core::Residue* next_res) {
+    if (!residue || !next_res) return std::nullopt;
+    const core::Atom* c1 = residue->get_atom("C1'");
+    const core::Atom* n  = residue->glycosidic_n();
+    const core::Atom* p  = next_res->get_atom("P");
+    if (!c1 || !n || !p) return std::nullopt;
+    const Vector3d a = c1->coords;
+    const Vector3d axis = n->coords - a;
+    const double norm = axis.norm();
+    if (norm < 1e-6) return std::nullopt;
+    const Vector3d d = axis * (1.0 / norm);
+    const Vector3d v = p->coords - a;
+    const Vector3d perp = v - d * v.dot(d);
+    return perp.norm();
+}
+
+int pucker_from_pperp(double pperp) { return pperp >= kPperpCutoff ? 3 : 2; }
+const char* pucker_label(int p) { return p == 3 ? "C3'-endo" : "C2'-endo"; }
 
 // Cerny severity thresholds.
 constexpr double kProscoPreferred  = 5.0;   // ProSco >= 5 -> Preferred, severity = 0
@@ -591,17 +621,48 @@ StructureScore Scorer::score_structure(
 
     const auto tors       = compute_all_torsions(structure);
     const auto pred_index = build_predecessor_index(tors);
+    // 3'-successor (invert predecessor) for the Pperp phosphate, and helix
+    // membership over the selected pairs — both drive the report-only sugar
+    // pucker flags (do not affect the score).
+    std::unordered_map<std::string, std::string> succ_index;
+    succ_index.reserve(pred_index.size());
+    for (const auto& [res, pred] : pred_index) succ_index[pred] = res;
+    const auto chains = pairfinder::algorithms::RNAChains::from_structure(structure);
+    const auto in_helix = pairfinder::algorithms::selection::helix_membership(selected, chains);
 
     StructureScore ss;
-    for (const auto& sc : selected) {
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+        const auto& sc = selected[i];
         if (!is_scorable(sc)) { ++ss.skipped_pairs; continue; }
         const auto r1 = res_by_id.find(sc.res_id1);
         const auto r2 = res_by_id.find(sc.res_id2);
         if (r1 == res_by_id.end() || r2 == res_by_id.end()) continue;
-        ss.pair_scores.push_back(score_pair(sc, *r1->second, *r2->second, finder, chem, typing));
+        PairScore ps = score_pair(sc, *r1->second, *r2->second, finder, chem, typing);
+        // "Unusual sugar pucker": C2'-endo (by δ) in a helical cWW G-C/A-U pair.
+        if (in_helix[i] && ps.lw_class == "cWW" && kHelicalWcBp.count(ps.bp_type)) {
+            for (const core::Residue* res : {r1->second, r2->second}) {
+                const auto tit = tors.find(res->res_id());
+                if (tit == tors.end() || !tit->second.delta) continue;
+                const double delta = *tit->second.delta;
+                if (impl_->richardson->pucker(delta) != 2) continue;  // only C2'-endo
+                const core::Residue* next_res = nullptr;
+                const auto sit = succ_index.find(res->res_id());
+                if (sit != succ_index.end()) {
+                    const auto nit = res_by_id.find(sit->second);
+                    if (nit != res_by_id.end()) next_res = nit->second;
+                }
+                const auto pp = compute_pperp(res, next_res);
+                UnusualPucker up;
+                up.res_id = res->res_id();
+                up.delta = delta;
+                up.pperp = pp;
+                up.pperp_confirms = (pp && *pp < kPperpCutoff);
+                ps.unusual_pucker.push_back(std::move(up));
+            }
+        }
+        ss.pair_scores.push_back(std::move(ps));
     }
     for (const auto& [rid, t] : tors) {
-        (void)t;
         if (is_dna_residue(rid)) continue;  // RNA-only backbone score (see helper)
         const auto suite = build_suite(rid, tors, pred_index);
         if (!suite) continue;
@@ -623,6 +684,33 @@ StructureScore Scorer::score_structure(
         rs.suiteness = sr.suiteness;
         rs.score    = std::max(0.0, std::min(100.0, sr.suiteness * 100.0));
         rs.recommendation = impl_->build_recommendation(*suite, sr);
+        // Sugar pucker: δ, Pperp, and the report-only OUTLIER (δ/Pperp disagree).
+        if (t.delta) {
+            const double delta = *t.delta;
+            rs.delta = delta;
+            const int pd = impl_->richardson->pucker(delta);
+            const core::Residue* residue = nullptr;
+            if (const auto rit = res_by_id.find(rid); rit != res_by_id.end())
+                residue = rit->second;
+            const core::Residue* next_res = nullptr;
+            if (const auto sit = succ_index.find(rid); sit != succ_index.end())
+                if (const auto nit = res_by_id.find(sit->second); nit != res_by_id.end())
+                    next_res = nit->second;
+            if (const auto pp = compute_pperp(residue, next_res)) {
+                rs.pperp = pp;
+                if (pd == 2 || pd == 3) {
+                    const int pp_pucker = pucker_from_pperp(*pp);
+                    if (pp_pucker != pd) {
+                        PuckerOutlier po;
+                        po.pperp = *pp;
+                        po.delta = delta;
+                        po.pucker_by_pperp = pucker_label(pp_pucker);
+                        po.pucker_by_delta = pucker_label(pd);
+                        rs.pucker_outlier = std::move(po);
+                    }
+                }
+            }
+        }
         ss.residue_scores.push_back(std::move(rs));
     }
 

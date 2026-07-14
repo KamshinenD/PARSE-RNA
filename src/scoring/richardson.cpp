@@ -233,4 +233,8 @@ const std::array<double, 7>& RichardsonClassifier::normal_widths() const {
     return impl_->normal;
 }
 
+int RichardsonClassifier::pucker(double delta) const {
+    return impl_->pucker(std::fmod(delta, 360.0));
+}
+
 }  // namespace pairfinder::scoring
