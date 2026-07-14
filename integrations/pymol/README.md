@@ -12,6 +12,7 @@ From the repo, after building `parse`:
 ```bash
 ./integrations/pymol/parse-view 1GID                 # a PDB id (fetched from RCSB)
 ./integrations/pymol/parse-view /path/to/mymodel.pdb # or a local file
+./integrations/pymol/parse-view 1GID acceptable      # optional tier: review|acceptable|all
 ```
 
 This opens PyMOL, loads the plugin, loads the structure, scores it, and
@@ -33,10 +34,11 @@ commands below.
 ## Use
 
 ```
-parse_score                 # score the current object, highlight problems
-parse_score 6DN1            # score object named 6DN1
-parse_score 6DN1, 0.5       # only flag issues with severity >= 0.5 (less noise)
-parse_score 6DN1, 0, 1      # also zoom onto the flagged pairs
+parse_score                 # score current object; worklist = Review tier (score<75)
+parse_score 6DN1            # score object named 6DN1 (Review tier)
+parse_score 6DN1, acceptable  # the minor-issue middle (75<=score<100), a polish pass
+parse_score 6DN1, all       # every non-Preferred pair
+parse_score 6DN1, all, 0.5  # ...and only issues with color severity >= 0.5 (less noise)
 parse_clear                 # remove the overlay
 ```
 
@@ -47,37 +49,47 @@ Each `parse_score` run:
    flagged pairs (sticks, colored by severity), plus a `parse_problems`
    selection you can `zoom parse_problems` / iterate over,
 4. prints a summary to the PyMOL log, ranked by each pair's worst-parameter
-   |Z′| (ProSco-gated). The 0–100 quality score is never used or shown — pairs
-   are ranked and reported purely by their ProSco/Z′ geometric deviation.
+   |Z′| (ProSco-gated).
 
-A typical loop: `parse_score` → inspect the red pairs → fix geometry / run a
-refinement round → reload → `parse_score` again; the highlights rebuild and
-fixed pairs drop out.
+**Which pairs are flagged** is gated by the whole-pair **score tier** (`tier`
+arg): `review` (score < 75, the default), `acceptable` (75 ≤ score < 100), or
+`all` (both). The score-tier decides *membership* — who a refiner reviews — while
+the ProSco/Z′ severity still decides *color and rank* within the worklist. So the
+default `parse_score` shows only the genuinely-poor pairs, and `parse_score obj,
+acceptable` (or `all`) widens the net for a thorough polishing pass. The printed
+header shows the structure's tier counts (e.g. `104 Preferred · 32 Acceptable ·
+10 Review`) so you know how big each pass is before you run it.
+
+A typical loop: `parse_score` (Review) → fix the flagged pairs → re-run; when the
+Review worklist is empty, `parse_score obj, acceptable` to polish the middle.
 
 ## What gets colored
 
-The whole structure is colored **gray** (all Preferred geometry recedes), and the
-flagged pairs are drawn as colored sticks on top. Coloring follows the three-tier
-scheme (Černý et al., NAR 2026), but the **color is the continuous severity**, not
-the discrete tier — so a near-boundary "Allowed" pair (severity ≈ 1) shows up
-nearly as red as an "Of Concern" pair. The discrete tier and the actual Z′ appear
-in the printed summary.
+The whole structure is colored **gray** (unflagged pairs recede), and the flagged
+pairs are drawn as colored sticks on top. **Hue encodes the *kind* of defect;
+within the warm ramp, intensity encodes severity:**
 
-- **gray** — Preferred geometry (no issue); the neutral background.
-- **yellow → red** — increasing severity of the worst ProSco/Z′-scored parameter
-  (shear, stretch, stagger, buckle, propeller, opening, H-bond distance/angles).
-- **not colored** — `incorrect_hbond_count` (a missing canonical H-bond) is not
-  ProSco/Z′-scored, so it has no tier; such pairs appear in the summary only.
+- **gray** — no flagged issue; the neutral background.
+- **yellow → red** — a geometric defect, colored by the continuous severity of the
+  worst ProSco/Z′-scored parameter (shear, stretch, stagger, buckle, propeller,
+  opening, H-bond distance/angles). A near-boundary "Allowed" pair (severity ≈ 1)
+  shows up nearly as red as an "Of Concern" one; the discrete Černý tier (NAR 2026)
+  and the actual Z′ appear in the printed summary.
+- **blue** — a bonding defect: `incorrect_hbond_count` (a missing/extra canonical
+  H-bond). It has no |Z′|, so it is kept **off** the warm ramp (a blue pair can be
+  geometrically perfect) and is placed at the **bottom** of the worklist. A pair
+  with both a geometry and a count issue is colored by its geometry (warm); the
+  count still shows in its breakdown.
 
-Pass `parse_score target, 0, 0, 0` (last arg `gray_background=0`) to keep the
-object's existing colors instead of graying. Only colors change — coordinates are
-never modified.
+Pass `parse_score target, review, 0, 0, 0` (last arg `gray_background=0`) to keep
+the object's existing colors instead of graying. Only colors change — coordinates
+are never modified.
 
 ## Commands
 
 | command | effect |
 |---|---|
-| `parse_score [obj], [min_severity], [zoom]` | score + highlight all flagged pairs |
+| `parse_score [obj], [tier], [min_severity], [zoom]` | score + highlight the flagged pairs; `tier` = `review` (default) / `acceptable` / `all` |
 | `parse_list [n]` | print the ranked worklist (default 25) |
 | `parse_dump [path]` | write the current scored pairs (incl. edits) to JSON — default `<obj>_pairs.json` |
 | `parse_load <path>` | rebuild the worklist from a `parse_dump` JSON — **no binary, no re-scoring** (for sharing a session) |

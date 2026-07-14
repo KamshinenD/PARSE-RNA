@@ -1,9 +1,10 @@
 """PARSE -> PyMOL: highlight problematic base pairs during refinement.
 
 Load in PyMOL:    run /path/to/parse_pymol.py
-Then:             parse_score            # score the current object, highlight problems
-                  parse_score 6DN1, 0.3  # object 6DN1, only severity >= 0.3
-                  parse_clear            # remove the highlights
+Then:             parse_score               # score current object; worklist = Review tier
+                  parse_score 6DN1, acceptable  # the minor-issue middle (polish pass)
+                  parse_score 6DN1, all     # every non-Preferred pair
+                  parse_clear               # remove the highlights
 
 What it does each run:
   1. saves the object's nucleotides to a temp PDB (chains renamed to unique
@@ -11,20 +12,25 @@ What it does each run:
      chain "1A" -- survive the legacy-PDB round-trip; res_ids are mapped back
      to the real chain names afterwards),
   2. runs the `parse` binary on it (sub-second, even on a ribosome),
-  3. colors the whole structure gray (so Preferred geometry recedes), then builds
+  3. colors the whole structure gray (so unflagged pairs recede), then builds
      an overlay object `parse_overlay` of just the flagged base pairs, shown as
      sticks on a continuous yellow->red heat-map by Cerny severity (mild
      Allowed -> yellow, Of-Concern -> red),
   4. prints a ranked summary (incl. H-bond-count issues, which are summary-only).
+
+Which pairs are flagged is gated by the whole-pair SCORE tier (`tier` arg to
+parse_score): 'review' (score<75, default), 'acceptable' (75<=score<100), or
+'all'. The score-tier decides *membership*; the Cerny |Z'| severity below still
+decides how each flagged pair is *colored and ranked*.
 
 Re-run after an edit/refinement round and the overlay rebuilds from scratch, so a
 pair that's been fixed simply disappears. Only colors change — coordinates are
 never modified (pass gray_background=0 to keep the object's existing colors).
 
 Binary: set $PARSE_BINARY, or `parse_set_binary /path/to/parse`.
-Tiers follow Cerny et al. (NAR 2026): Of Concern |Z'|>5, Allowed |Z'|<=5,
-Preferred (unflagged). H-bond-count issues carry no ProSco/Z' tier and are
-reported in the summary only, not colored.
+Severity coloring follows Cerny et al. (NAR 2026): Of Concern |Z'|>5, Allowed
+|Z'|<=5. H-bond-count issues carry no ProSco/Z' tier and are reported in the
+summary only, not colored.
 """
 import json
 import os
@@ -123,6 +129,64 @@ def severity_to_rgb(sev):
     return [1.0, 1.0 - s, 0.0]
 
 
+# ---------------------------------------------------------------------------
+# Pair-score tiers — whole-pair triage that GATES the worklist. Distinct from
+# the per-parameter Cerny tiers (Preferred/Allowed/Of Concern) that COLOR it:
+# the pair-score tier decides *which pairs a refiner reviews*, the |Z'| severity
+# decides *how each flagged pair is colored/ranked*. Preferred = score 100,
+# Acceptable = [75,100), Review = <75 (mirrors scoring/result.py::pair_tier).
+# ---------------------------------------------------------------------------
+
+def pair_tier(score):
+    """Whole-pair triage tier from the 0-100 score, or None if unscored."""
+    if score is None:
+        return None
+    if score >= 100.0:
+        return "Preferred"
+    if score >= 75.0:
+        return "Acceptable"
+    return "Review"
+
+
+#: worklist tier filter word -> the pair-score tiers that populate the worklist.
+_TIER_SETS = {
+    "review": {"Review"},                       # default: the genuinely-bad pairs
+    "acceptable": {"Acceptable"},               # the minor-issue middle (polish pass)
+    "all": {"Acceptable", "Review"},            # everything non-Preferred
+}
+
+
+def tiers_for(name):
+    """Resolve a tier-filter word to its tier set.
+
+    Unknown/typo values fall back to the default 'review' set, so a mistyped
+    filter never silently empties the worklist.
+    """
+    return _TIER_SETS.get(str(name).strip().lower(), _TIER_SETS["review"])
+
+
+def pair_tier_of(p):
+    """Pair-score tier of a scored pair dict (emitted `tier`, else derived)."""
+    return p.get("tier") or pair_tier(p.get("score"))
+
+
+def tier_counts(data):
+    """Structure-level {Preferred, Acceptable, Review} counts.
+
+    Prefers the binary's emitted `tier_summary`; falls back to deriving from
+    per-pair scores for older `parse` outputs that predate the field.
+    """
+    ts = data.get("tier_summary")
+    if ts:
+        return ts
+    counts = {"Preferred": 0, "Acceptable": 0, "Review": 0}
+    for p in data.get("pairs", []):
+        t = pair_tier_of(p)
+        if t in counts:
+            counts[t] += 1
+    return counts
+
+
 def pair_label(f):
     """Compact, readable name for a flagged pair, e.g. 'A226.U249 (chain A)'.
 
@@ -136,8 +200,29 @@ def pair_label(f):
     return f"{c1}/{n1}{s1}·{c2}/{n2}{s2}"
 
 
+#: distinct color for H-bond-count pairs. Cool = a bonding/topology defect (a
+#: missing or extra canonical H-bond), deliberately OFF the warm yellow->red
+#: geometric-severity ramp so it never implies a shape distortion that isn't
+#: there. Also far from the green ideal-overlay / in-range colors.
+_HBOND_RGB = [0.15, 0.45, 1.0]
+
+
+def _hbond_count_detail(p):
+    """The pair's incorrect_hbond_count issue detail dict, or None."""
+    for d in (p.get("issue_details") or []):
+        if d.get("issue") == "incorrect_hbond_count":
+            return d
+    return None
+
+
 def severity_headline(f):
-    """'propeller 6.2sigma' -- the worst parameter and its |Z'| magnitude."""
+    """One-line 'what's worst' string for a flagged pair.
+
+    Geometry pairs: 'propeller 6.2σ' (worst parameter + |Z'|). H-bond-count
+    pairs carry no |Z'|, so they headline as 'H-bond count' instead.
+    """
+    if f.get("kind") == "hbond":
+        return "H-bond count"
     issue = f.get("worst_issue") or "?"
     z = f.get("worst_z")
     return f"{issue} {abs(z):.1f}σ" if z is not None else f"{issue} (no Z')"
@@ -149,36 +234,78 @@ def pair_score_str(f):
     return f"{s:.0f}" if s is not None else "?"
 
 
-def flagged_pairs(data, min_severity=0.0):
-    """Pairs with a colorable issue, ranked worst-first by unclamped |Z'|.
+def _pair_flag(p):
+    """Classify one scored pair into a flag dict: geometry / hbond / clean.
 
-    Ranking is the single most-deviant parameter's |Z'| (ProSco-gated), never the
-    0-100 quality score. Returns dicts:
-    {res_id1, res_id2, sequence, lw_class, rank, sev, worst_issue, worst_z,
-     tier, issue, details}.  `rank` sorts; `sev` (clamped 0..1) colors.
+    * ``geometry`` — has a ProSco/Z'-colorable parameter (shear, propeller,
+      opening, ...); ranked/colored by its worst |Z'| on the warm ramp.
+    * ``hbond``    — no colorable geometry, but a missing/extra canonical H-bond
+      (incorrect_hbond_count); shown blue, ordered by its graded severity.
+    * ``clean``    — nothing out of range (Preferred parameters only).
+
+    Geometry wins when both are present (the count still shows in the breakdown).
+    `rank` sorts geometry worst-first; `sev` (0..1) drives the color intensity.
     """
-    out = []
-    for p in data.get("pairs", []):
-        w = worst_parameter(p.get("issue_details"))
-        if w is None:
-            continue
+    base = {
+        "res_id1": p["res_id1"], "res_id2": p["res_id2"],
+        "sequence": p.get("sequence"),
+        "lw_class": (p.get("classification") or {}).get("lw_class"),
+        "pair_tier": pair_tier_of(p), "score": p.get("score"),
+        "details": p.get("issue_details", []),
+    }
+    w = worst_parameter(p.get("issue_details"))
+    if w is not None:
         rank = rank_severity(w)
-        if rank <= 0.0:
-            continue
-        clamped = min(1.0, rank)            # 0..1, only for the color ramp
-        if clamped < min_severity:
-            continue
-        out.append({
-            "res_id1": p["res_id1"], "res_id2": p["res_id2"],
-            "sequence": p.get("sequence"),
-            "lw_class": (p.get("classification") or {}).get("lw_class"),
-            "rank": rank, "sev": clamped,
-            "worst_issue": w.get("issue"), "worst_z": w.get("zprime"),
-            "tier": w.get("tier", ""), "score": p.get("score"),
-            "issue": w.get("issue"), "details": p.get("issue_details", []),
+        if rank > 0.0:
+            base.update({
+                "kind": "geometry", "rank": rank, "sev": min(1.0, rank),
+                "worst_issue": w.get("issue"), "worst_z": w.get("zprime"),
+                "tier": w.get("tier", ""), "issue": w.get("issue"),
+            })
+            return base
+    hb = _hbond_count_detail(p)
+    if hb is not None:
+        sev = min(1.0, max(0.0, float(hb.get("severity") or 0.0)))
+        base.update({
+            "kind": "hbond", "rank": 0.0, "sev": sev,
+            "worst_issue": "incorrect_hbond_count", "worst_z": None,
+            "tier": "", "issue": "incorrect_hbond_count",
         })
-    out.sort(key=lambda r: -r["rank"])
-    return out
+        return base
+    base.update({
+        "kind": "clean", "rank": 0.0, "sev": 0.0,
+        "worst_issue": None, "worst_z": None, "tier": "Preferred", "issue": None,
+    })
+    return base
+
+
+def flagged_pairs(data, min_severity=0.0, tiers=None):
+    """Pairs in the requested score-tier(s) with a colorable issue, worst-first.
+
+    `tiers` is the set of pair-score tiers allowed into the worklist (default
+    {"Review"}). A pair enters only if its pair-score tier is in `tiers` AND it
+    has a colorable issue — either a ProSco/Z'-scored geometry parameter (warm
+    ramp) OR a missing/extra canonical H-bond (blue). Geometry pairs are ranked
+    worst-first by |Z'|; H-bond-count pairs (no |Z'|) are appended AFTER them,
+    ordered by their graded severity. Returns _pair_flag dicts (see that fn).
+    """
+    if tiers is None:
+        tiers = {"Review"}
+    geom, hbond = [], []
+    for p in data.get("pairs", []):
+        if pair_tier_of(p) not in tiers:        # aggregate score-tier gate
+            continue
+        f = _pair_flag(p)
+        if f["sev"] < min_severity:             # power-user color-intensity trim
+            continue
+        if f["kind"] == "geometry":
+            geom.append(f)
+        elif f["kind"] == "hbond":
+            hbond.append(f)
+        # clean -> not flagged
+    geom.sort(key=lambda r: -r["rank"])
+    hbond.sort(key=lambda r: -r["sev"])
+    return geom + hbond
 
 
 def hbond_count_pairs(data):
@@ -194,24 +321,36 @@ def hbond_count_pairs(data):
     return out
 
 
-def format_summary(data, flagged, hbcount, obj):
-    """Human-readable ranked summary string (ranked by ProSco/|Z'|, no score)."""
+def format_summary(data, flagged, hbcount, obj, tier_label="review"):
+    """Human-readable ranked summary string (ranked by ProSco/|Z'|, no score).
+
+    Header shows the whole-structure pair-score tier counts, then the worklist
+    line notes which tier filter it reflects (`tier_label`).
+    """
     n_oc = sum(1 for f in flagged if f["tier"] == "Of Concern")
     n_al = sum(1 for f in flagged if f["tier"] == "Allowed")
-    lines = [f"PARSE: {obj}  {len(data.get('pairs', []))} pairs, "
-             f"{len(flagged)} flagged ({n_oc} Of Concern, {n_al} Allowed)"]
+    n_hb = sum(1 for f in flagged if f.get("kind") == "hbond")
+    tc = tier_counts(data)
+    lines = [f"PARSE: {obj}  {len(data.get('pairs', []))} pairs  "
+             f"(structure: {tc.get('Preferred', 0)} Preferred · "
+             f"{tc.get('Acceptable', 0)} Acceptable · {tc.get('Review', 0)} Review)",
+             f"worklist [{tier_label} tier]: {len(flagged)} flagged "
+             f"({n_oc} Of Concern, {n_al} Allowed, {n_hb} H-bond count)"]
     if flagged:
-        lines.append("worst pairs (ranked by worst-parameter |Z'|):")
+        lines.append("worst pairs (geometry by |Z'|, then H-bond-count in blue):")
         for f in flagged[:25]:
+            extra = failing_params(f["details"]) or ("missing/extra canonical H-bond"
+                                                      if f.get("kind") == "hbond" else "")
             lines.append(f"  {pair_label(f)}  "
                          f"{f.get('lw_class') or '?'} {f.get('sequence') or ''}  "
-                         f"{severity_headline(f)}  [{failing_params(f['details'])}]")
-    # Only surface count issues for pairs that are NOT otherwise flagged/colored
-    # (a colored pair already shows its count issue in its [...] breakdown above).
+                         f"{severity_headline(f)}  [{extra}]")
+    # Any remaining H-bond-count pairs outside the current tier (so not in the
+    # worklist) — surfaced as text so they're never silently dropped.
     flagged_keys = {(f["res_id1"], f["res_id2"]) for f in flagged}
     only_count = [h for h in hbcount if (h["res_id1"], h["res_id2"]) not in flagged_keys]
     if only_count:
-        lines.append(f"H-bond-count only ({len(only_count)}, summary only, not colored):")
+        lines.append(f"H-bond-count pairs outside the {tier_label} tier "
+                     f"({len(only_count)}, not in this worklist):")
         for h in only_count[:25]:
             lines.append(f"  {pair_label(h)}  "
                          f"{h.get('lw_class') or '?'} {h.get('sequence') or ''}")
@@ -368,18 +507,33 @@ def parse_clear(_self=None):
     print("PARSE: cleared")
 
 
-def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=None):
+def parse_score(obj=None, tier="review", min_severity=0.0, zoom=0,
+                gray_background=1, _self=None):
     """Score the current (or named) object and highlight problematic base pairs.
 
     obj             object to score (default: first enabled object)
-    min_severity    only flag issues with severity >= this (0..1; default 0 = all)
+    tier            which pair-score tier(s) populate the worklist:
+                      'review'     (default) score < 75  — the genuinely-bad pairs
+                      'acceptable' 75 <= score < 100     — the minor-issue middle
+                      'all'        both (everything non-Preferred)
+                    Preferred (score 100) pairs are never flagged. The tier gates
+                    *membership*; |Z'| severity still colors/ranks within it.
+    min_severity    also drop flagged issues with severity < this (0..1; power-user
+                    trim on top of the tier gate; default 0 = keep all in the tier)
     zoom            1 to zoom onto the flagged pairs
-    gray_background 1 to color the whole structure gray (so Preferred geometry is
+    gray_background 1 to color the whole structure gray (so unflagged geometry is
                     gray and only the flagged pairs carry color); 0 to leave the
                     object's existing colors. Coordinates are never modified.
+
+    Examples:
+        parse_score                 # current object, worklist = Review tier
+        parse_score 6DN1, acceptable
+        parse_score 6DN1, all, 0.3  # non-Preferred, min color severity 0.3
     """
     from pymol import cmd
     min_severity = float(min_severity)
+    tier_label = str(tier).strip().lower()
+    tiers = tiers_for(tier_label)
 
     if obj is None:
         objs = cmd.get_object_list()
@@ -394,9 +548,9 @@ def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=Non
         print(f"PARSE: error: {e}")
         return
 
-    flagged = flagged_pairs(data, min_severity)
+    flagged = flagged_pairs(data, min_severity, tiers)
     hbcount = hbond_count_pairs(data)
-    print(format_summary(data, flagged, hbcount, obj))
+    print(format_summary(data, flagged, hbcount, obj, tier_label))
 
     # Reset any previous worklist focus, then build a fresh queue for this run.
     global _QUEUE, _POS, _SCORED_OBJ, _STRUCT_SCORE, _SCORED_DATA
@@ -412,6 +566,8 @@ def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=Non
         "pairs":    data.get("pairs_score"),
         "residues": data.get("backbone_score"),
         "n_pairs":  data.get("n_pairs"),
+        "tiers":    tier_counts(data),
+        "tier_label": tier_label,
     }
 
     # Gray the whole structure so Preferred geometry recedes and the flagged
@@ -423,6 +579,10 @@ def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=Non
     cmd.delete(_OVERLAY)
     cmd.delete(_PROBLEMS)
     if not flagged:
+        tc = tier_counts(data)
+        _set_hud(cmd, f"PARSE [{tier_label} tier]  0 flagged   "
+                      f"(structure: {tc.get('Preferred', 0)} Preferred · "
+                      f"{tc.get('Acceptable', 0)} Acceptable · {tc.get('Review', 0)} Review)")
         return
     _build_overlay(cmd, obj, flagged)
 
@@ -434,8 +594,9 @@ def parse_score(obj=None, min_severity=0.0, zoom=0, gray_background=1, _self=Non
     # Guided HUD: bind nav keys (once) and show a starting status line.
     _bind_nav(cmd)
     n_oc = sum(1 for x in flagged if x["tier"] == "Of Concern")
-    _set_hud(cmd, f"PARSE  {len(flagged)} flagged ({n_oc} Of Concern)   "
-                  f"press → to start the worklist   (Ctrl-I = inspect a clicked pair)")
+    _set_hud(cmd, f"PARSE [{tier_label} tier]  {len(flagged)} flagged "
+                  f"({n_oc} Of Concern)   press → to start the worklist   "
+                  f"(Ctrl-I = inspect a clicked pair)")
 
 
 def _build_overlay(cmd, obj, flagged):
@@ -447,25 +608,39 @@ def _build_overlay(cmd, obj, flagged):
     the flagged residues, and color everything in one `spectrum` call. The B-factor
     is written only on the throwaway copy, so the original object's B-factors,
     colors and coordinates are never touched. ~150x faster on a ribosome.
+
+    Two color classes: geometry residues carry b in [0,1] and get the warm
+    yellow->red ramp; H-bond-count residues (bonding defect, no |Z'|) carry a
+    negative sentinel and are colored a flat blue instead — geometry wins when a
+    residue is in both. Non-flagged residues (b = -1) are removed.
     """
-    # {(chain, resi): worst clamped severity} for every flagged residue.
-    sevmap = {}
+    # Geometry residues -> worst clamped severity (0..1). H-bond residues that are
+    # NOT already geometry-flagged -> a keep-me sentinel (colored blue below).
+    geo_sevmap, hb_res = {}, set()
     for f in flagged:
         for rid in (f["res_id1"], f["res_id2"]):
             ch, _, seq = parse_res_id(rid)
-            sevmap[(ch, seq)] = max(sevmap.get((ch, seq), 0.0), f["sev"])
+            if f.get("kind") == "hbond":
+                hb_res.add((ch, seq))
+            else:
+                geo_sevmap[(ch, seq)] = max(geo_sevmap.get((ch, seq), 0.0), f["sev"])
+    hb_res -= set(geo_sevmap)          # geometry wins the color for shared residues
 
-    # Copy the nucleotides (simple selection), stamp severity into the copy's B,
-    # then drop everything that isn't flagged (sentinel -1 -> removed).
     nsel = f"({obj}) and (polymer.nucleic or byres (({obj}) and name C1'))"
     cmd.create(_OVERLAY, nsel)
-    cmd.alter(_OVERLAY, "b = sevmap.get((chain, resi), -1.0)", space={"sevmap": sevmap})
-    cmd.remove(f"{_OVERLAY} and b < -0.5")
+    cmd.alter(_OVERLAY,
+              "b = geo.get((chain, resi), -0.25 if (chain, resi) in hb else -1.0)",
+              space={"geo": geo_sevmap, "hb": hb_res})
+    cmd.remove(f"{_OVERLAY} and b < -0.5")   # drop non-flagged; keep geo (>=0) + hb (-0.25)
     cmd.hide("everything", _OVERLAY)
     cmd.show("sticks", _OVERLAY)
     cmd.set("stick_radius", 0.18, _OVERLAY)
-    # One pass: clamped severity 0->1 maps yellow->red, matching severity_to_rgb.
-    cmd.spectrum("b", "yellow red", _OVERLAY, minimum=0.0, maximum=1.0)
+    # Geometry: clamped severity 0->1 maps yellow->red (matches severity_to_rgb).
+    # (PyMOL's selection algebra has no ">="; the -0.1 cut splits geo>=0 from hb=-0.25.)
+    cmd.spectrum("b", "yellow red", f"{_OVERLAY} and b > -0.1", minimum=0.0, maximum=1.0)
+    # H-bond-count: flat blue, off the geometric ramp.
+    cmd.set_color("parse_hbond_col", _HBOND_RGB)
+    cmd.color("parse_hbond_col", f"{_OVERLAY} and b < -0.1")
 
 
 # ---------------------------------------------------------------------------
@@ -475,13 +650,16 @@ def _build_overlay(cmd, obj, flagged):
 def build_queue(flagged):
     """Order flagged pairs chain-grouped, worst-first within each chain.
 
-    `flagged` is already globally severity-descending, so the first time a chain
-    appears is its worst pair -> chains end up ordered by their worst pair, and
-    each chain's pairs stay worst-first. Walking the queue then keeps consecutive
-    steps in the same region instead of teleporting across the structure.
+    Geometry pairs are grouped by chain (first-seen order = worst-chain first),
+    worst-first within each chain, so walking the queue stays in one region
+    instead of teleporting. H-bond-count pairs (a subtler bonding defect, no
+    |Z'|) are kept OUT of the chain grouping and appended at the very bottom,
+    in their incoming severity order — so the worklist ends with them.
     """
+    geom = [f for f in flagged if f.get("kind") != "hbond"]
+    hbond = [f for f in flagged if f.get("kind") == "hbond"]
     by_chain, order = {}, []
-    for f in flagged:
+    for f in geom:
         ch = parse_res_id(f["res_id1"])[0]
         if ch not in by_chain:
             by_chain[ch] = []
@@ -490,6 +668,7 @@ def build_queue(flagged):
     queue = []
     for ch in order:
         queue.extend(by_chain[ch])
+    queue.extend(hbond)                 # H-bond-count pairs at the very bottom
     return queue
 
 
@@ -547,12 +726,19 @@ def _render_focus(cmd, f, dim=1, pos=None, total=None):
     if int(dim):
         cmd.set("cartoon_transparency", 0.85, obj)
 
-    # The pair itself: bright sticks — severity-colored if flagged, green if clean.
+    # The pair itself: bright sticks. Blue for an H-bond-count defect, warm
+    # severity color for a geometry defect, green when nothing is out of range.
     cmd.create(_FOCUS, pair_sel)
     cmd.hide("everything", _FOCUS)
     cmd.show("sticks", _FOCUS)
     cmd.set("stick_radius", 0.25, _FOCUS)
-    cmd.set_color("parse_focus_col", severity_to_rgb(f["sev"]) if flagged else [0.35, 0.78, 0.35])
+    if f.get("kind") == "hbond":
+        focus_col = _HBOND_RGB
+    elif flagged:
+        focus_col = severity_to_rgb(f["sev"])
+    else:
+        focus_col = [0.35, 0.78, 0.35]
+    cmd.set_color("parse_focus_col", focus_col)
     cmd.color("parse_focus_col", _FOCUS)
 
     # Local context: nearby residues as thin gray lines (what's crowding it).
@@ -588,12 +774,20 @@ def _render_focus(cmd, f, dim=1, pos=None, total=None):
 
     # Console: score + which parameters are out of range (or that none are).
     where = f"[{pos}/{total}]" if pos else "(lookup)"
-    tier = f.get("tier") or ("Preferred" if not flagged else "")
-    status = f"worst: {severity_headline(f)}" if flagged else "all parameters in range"
+    kind = f.get("kind")
+    if kind == "hbond":
+        tier, status = "H-bond count", "worst: H-bond count (bonding defect)"
+    elif flagged:
+        tier = f.get("tier") or ""
+        status = f"worst: {severity_headline(f)}"
+    else:
+        tier, status = "Preferred", "all parameters in range"
     print(f"PARSE {where} {pair_label(f)}  "
           f"{f.get('lw_class') or '?'} {f.get('sequence') or ''}  "
           f"score {pair_score_str(f)}/100  {status}  ({tier})")
-    if flagged:
+    if kind == "hbond":
+        print("  out of range: missing or extra canonical H-bond (geometry in range)")
+    elif flagged:
         print(f"  out of range: {failing_params(f['details']) or '(none colored)'}")
     else:
         print("  out of range: none — every parameter is within Preferred range")
@@ -602,7 +796,12 @@ def _render_focus(cmd, f, dim=1, pos=None, total=None):
 
     # On-screen HUD (viewport title): always-visible position + current pair.
     where_hud = f"{pos}/{total}" if pos else "lookup"
-    hud_status = f"{severity_headline(f)} [{tier}]" if flagged else f"in range [{tier}]"
+    if kind == "hbond":
+        hud_status = "H-bond count (blue)"
+    elif flagged:
+        hud_status = f"{severity_headline(f)} [{tier}]"
+    else:
+        hud_status = f"in range [{tier}]"
     _set_hud(cmd, f"PARSE {where_hud}  {pair_label(f)}  "
                   f"{f.get('lw_class') or '?'} {f.get('sequence') or ''}  "
                   f"score {pair_score_str(f)}/100  {hud_status}   "
@@ -764,9 +963,13 @@ def parse_overview(_self=None):
     def _f(x):
         return f"{x:.1f}" if isinstance(x, (int, float)) else "?"
     ss = _STRUCT_SCORE or {}
+    tc = ss.get("tiers") or {}
+    tlabel = ss.get("tier_label", "review")
     score_line = (f"{_SCORED_OBJ}: PARSE pairs {_f(ss.get('pairs'))}/100, "
                   f"backbone {_f(ss.get('residues'))}/100  "
-                  f"— {len(_QUEUE)} flagged pair(s)")
+                  f"(structure: {tc.get('Preferred', 0)} Preferred · "
+                  f"{tc.get('Acceptable', 0)} Acceptable · {tc.get('Review', 0)} Review)"
+                  f"  — {len(_QUEUE)} flagged [{tlabel} tier]")
     print(f"PARSE: overview — {score_line}")
     _set_hud(cmd, f"PARSE overview   {score_line}   (→ parse_next to step through)")
 
@@ -794,25 +997,12 @@ def _parse_residue_token(token):
 
 
 def _pair_view(p):
-    """Build a flagged_pairs-style view dict from a raw scored pair `p`.
+    """Build a flag view dict from a raw scored pair `p` (for ad-hoc lookups).
 
-    Works for clean (Preferred) pairs too: worst_* is None and sev is 0 when
-    nothing is out of range, which _render_focus draws green and reports in-range.
+    Delegates to _pair_flag, so a geometry pair is drawn on the warm ramp, an
+    H-bond-count pair blue, and a clean (Preferred) pair green / 'in range'.
     """
-    w = worst_parameter(p.get("issue_details"))
-    rank = rank_severity(w) if w else 0.0
-    return {
-        "res_id1": p["res_id1"], "res_id2": p["res_id2"],
-        "sequence": p.get("sequence"),
-        "lw_class": (p.get("classification") or {}).get("lw_class"),
-        "rank": rank, "sev": min(1.0, rank),
-        "worst_issue": w.get("issue") if w else None,
-        "worst_z": w.get("zprime") if w else None,
-        "tier": (w.get("tier", "") if w else "Preferred"),
-        "score": p.get("score"),
-        "issue": w.get("issue") if w else None,
-        "details": p.get("issue_details", []),
-    }
+    return _pair_flag(p)
 
 
 def _find_scored_pairs(chain, resseq):
@@ -884,13 +1074,15 @@ def parse_list(n=25, _self=None):
     if not _require_queue():
         return
     n = int(n)
-    print(f"PARSE worklist: {len(_QUEUE)} pairs (chain-grouped, worst-first by |Z'|)")
+    print(f"PARSE worklist: {len(_QUEUE)} pairs (geometry by |Z'|, then H-bond-count)")
     for i, f in enumerate(_QUEUE[:n]):
         mark = ">" if i == _POS else " "
+        note = failing_params(f["details"], 2) or ("H-bond count"
+                                                   if f.get("kind") == "hbond" else "")
         print(f" {mark}{i + 1:>4}  {pair_label(f)}  "
               f"{f.get('lw_class') or '?'} {f.get('sequence') or ''}  "
               f"score {pair_score_str(f)}/100  "
-              f"{severity_headline(f)} {f['tier']}  [{failing_params(f['details'], 2)}]")
+              f"{severity_headline(f)} {f['tier']}  [{note}]")
     if len(_QUEUE) > n:
         print(f"  ... {len(_QUEUE) - n} more (parse_list {len(_QUEUE)} for all)")
 
@@ -923,13 +1115,15 @@ def parse_dump(path=None, _self=None):
     print(f"PARSE: wrote {n} scored pair(s) to {path}")
 
 
-def parse_load(path, _self=None):
+def parse_load(path, tier="review", _self=None):
     """Rebuild the worklist from a parse_dump JSON -- WITHOUT re-scoring.
 
     Lets anyone (e.g. a colleague you sent the .pse + JSON to) step through a
     previously scored structure -- parse_next / parse_prev / parse_list /
     parse_overview / parse_dump -- with no parse binary. The object named
     in the JSON (its 'pdb_id') should already be loaded, e.g. from the .pse.
+    `tier` selects which pair-score tier(s) populate the worklist (default
+    'review'; see parse_score).
     """
     from pymol import cmd
     import json
@@ -947,19 +1141,22 @@ def parse_load(path, _self=None):
         print(f"PARSE: note - object '{obj}' is not loaded; navigation needs it "
               f"(open its .pse/structure first).")
 
+    tier_label = str(tier).strip().lower()
     global _QUEUE, _POS, _SCORED_OBJ, _STRUCT_SCORE, _SCORED_DATA
     _SCORED_DATA = data
     _SCORED_OBJ = obj
-    _QUEUE = build_queue(flagged_pairs(data))
+    _QUEUE = build_queue(flagged_pairs(data, tiers=tiers_for(tier_label)))
     _POS = -1
     _STRUCT_SCORE = {
         "pairs":    data.get("pairs_score"),
         "residues": data.get("backbone_score"),
         "n_pairs":  data.get("n_pairs"),
+        "tiers":    tier_counts(data),
+        "tier_label": tier_label,
     }
     _bind_nav(cmd)
-    print(f"PARSE: loaded {len(_QUEUE)} flagged pair(s) for '{obj}' from {path}  "
-          f"(parse_next to step through — no re-scoring)")
+    print(f"PARSE: loaded {len(_QUEUE)} flagged pair(s) [{tier_label} tier] for "
+          f"'{obj}' from {path}  (parse_next to step through — no re-scoring)")
 
 
 def parse_ideal(state="toggle", _self=None):
