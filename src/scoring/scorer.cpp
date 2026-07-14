@@ -62,11 +62,6 @@ const std::array<const char*, 9> kIssueKeys = {
     "shear", "stretch", "stagger", "buckle", "propeller", "opening",
     "distance", "hbond_angles", "incorrect_hbond_count"};
 
-std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
-
 // canonicalize_bp -> (canonical_bp, swapped).
 std::pair<std::string, bool> canonicalize_bp(const std::string& bp, const std::string& lw) {
     if (!kSelfReciprocal.count(lw)) return {bp, false};

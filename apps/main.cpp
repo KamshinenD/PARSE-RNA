@@ -238,7 +238,9 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         // `ss.overall` is still computed; uncomment to revive.
         // out["overall_score"] = round_to(ss.overall, 2);
         out["pairs_score"] = round_to(ss.pairs_score, 2);
-        out["backbone_score"] = round_to(ss.residues_score, 2);
+        // Mean Richardson suiteness as a 0-1 fraction (wwPDB RNA-suiteness
+        // convention). Internally residues_score is 0-100, so scale down here.
+        out["backbone_suiteness"] = round_to(ss.residues_score / 100.0, 3);
         // Pair triage tier counts (Preferred/Acceptable/Review) — mirror of
         // Python StructureScore.tier_summary(). Always all three keys.
         const auto ts = ss.tier_summary();
@@ -280,7 +282,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             }
             out["score_details"] = json{
                 {"pairs_score", round_to(ss.pairs_score, 2)},
-                {"backbone_score", round_to(ss.residues_score, 2)},
+                {"backbone_suiteness", round_to(ss.residues_score / 100.0, 3)},
                 {"tier_summary", tier_summary},
                 {"issue_summary", summary},
                 {"n_scored_pairs", static_cast<int>(ss.pair_scores.size())},

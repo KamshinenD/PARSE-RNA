@@ -44,7 +44,7 @@ jobs:
           import json, sys
           d = json.load(open('1GID.json'))
           n = d['n_pairs']
-          print(f'1GID: {n} pairs selected, pairs_score={d[\"pairs_score\"]}, backbone_score={d[\"backbone_score\"]}')
+          print(f'1GID: {n} pairs selected, pairs_score={d[\"pairs_score\"]}, backbone_suiteness={d[\"backbone_suiteness\"]}')
           assert n > 0, 'expected pairs but got 0'
           print('OK')
           "

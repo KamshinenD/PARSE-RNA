@@ -564,7 +564,7 @@ def parse_score(obj=None, tier="review", min_severity=0.0, zoom=0,
     _SCORED_DATA = data                    # full JSON, written out by parse_dump
     _STRUCT_SCORE = {                       # per-axis scores, shown by parse_overview
         "pairs":    data.get("pairs_score"),
-        "residues": data.get("backbone_score"),
+        "residues": data.get("backbone_suiteness", data.get("backbone_score")),
         "n_pairs":  data.get("n_pairs"),
         "tiers":    tier_counts(data),
         "tier_label": tier_label,
@@ -962,11 +962,13 @@ def parse_overview(_self=None):
     # Whole-RNA score line (console + HUD).
     def _f(x):
         return f"{x:.1f}" if isinstance(x, (int, float)) else "?"
+    def _f3(x):        # backbone_suiteness is a 0-1 fraction (wwPDB convention)
+        return f"{x:.3f}" if isinstance(x, (int, float)) else "?"
     ss = _STRUCT_SCORE or {}
     tc = ss.get("tiers") or {}
     tlabel = ss.get("tier_label", "review")
     score_line = (f"{_SCORED_OBJ}: PARSE pairs {_f(ss.get('pairs'))}/100, "
-                  f"backbone {_f(ss.get('residues'))}/100  "
+                  f"backbone suiteness {_f3(ss.get('residues'))}  "
                   f"(structure: {tc.get('Preferred', 0)} Preferred · "
                   f"{tc.get('Acceptable', 0)} Acceptable · {tc.get('Review', 0)} Review)"
                   f"  — {len(_QUEUE)} flagged [{tlabel} tier]")
@@ -1149,7 +1151,7 @@ def parse_load(path, tier="review", _self=None):
     _POS = -1
     _STRUCT_SCORE = {
         "pairs":    data.get("pairs_score"),
-        "residues": data.get("backbone_score"),
+        "residues": data.get("backbone_suiteness", data.get("backbone_score")),
         "n_pairs":  data.get("n_pairs"),
         "tiers":    tier_counts(data),
         "tier_label": tier_label,
