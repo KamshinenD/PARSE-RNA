@@ -641,6 +641,7 @@ StructureScore Scorer::score_structure(
         // "Unusual sugar pucker": C2'-endo (by δ) in a helical cWW G-C/A-U pair.
         if (in_helix[i] && ps.lw_class == "cWW" && kHelicalWcBp.count(ps.bp_type)) {
             for (const core::Residue* res : {r1->second, r2->second}) {
+                if (is_dna_residue(res->res_id())) continue;  // DNA is natively C2'-endo
                 const auto tit = tors.find(res->res_id());
                 if (tit == tors.end() || !tit->second.delta) continue;
                 const double delta = *tit->second.delta;
