@@ -26,6 +26,7 @@ int dump_pairs(const std::string& path);       ///< selected pairs
 int dump_scores(const std::string& path);      ///< empirical per-pair scores
 int dump_structure(const std::string& path);   ///< whole-structure score
 int dump_torsions(const std::string& path);    ///< backbone suite torsions
+int dump_pucker(const std::string& path);      ///< per-residue delta + Pperp
 int classify_suite(const std::vector<std::string>& angles);  ///< suiteness of 7 angles
 
 }  // namespace pfcli

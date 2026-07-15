@@ -425,6 +425,7 @@ const std::pair<const char*, DumpFn> kDumpCommands[] = {
     {"dump-scores", pfcli::dump_scores},
     {"dump-structure", pfcli::dump_structure},
     {"dump-torsions", pfcli::dump_torsions},
+    {"dump-pucker", pfcli::dump_pucker},
 };
 
 }  // namespace

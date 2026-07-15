@@ -12,10 +12,13 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <pairfinder/algorithms/base_frame_calculator.hpp>
 #include <pairfinder/algorithms/candidate_finder.hpp>
+#include <pairfinder/algorithms/rna_chains.hpp>
+#include <pairfinder/algorithms/selection.hpp>
 #include <pairfinder/algorithms/classify_pair.hpp>
 #include <pairfinder/algorithms/confidence.hpp>
 #include <pairfinder/algorithms/edge_classifier.hpp>
@@ -184,6 +187,46 @@ int dump_structure(const std::string& path) {
     }
     std::sort(rows.begin(), rows.end());
     for (const auto& r : rows) std::cout << r << '\n';
+    return 0;
+}
+
+// Per-residue sugar pucker: emit "<res_id>\t<delta>\t<pperp>\t<helical>" for every
+// scored residue that has both — the full-set δ-vs-Pperp distribution, at C++ speed.
+// `helical` = 1 if the residue sits in a HELICAL cWW G-C/A-U pair (the sugar-pucker
+// check's context; A-form → C3'-endo), else 0. (residue_scores are already RNA-only.)
+int dump_pucker(const std::string& path) {
+    using namespace pairfinder;
+    Pipeline pipeline(cli_pipeline_config());
+    auto prep = pipeline.prepare(path);
+    auto& structure = prep.structure;
+    auto& chem = pipeline.chem();
+    const auto& typing = pipeline.typing();
+    auto scored = pipeline.classify(prep);
+    const auto selected = pipeline.select(std::move(scored), structure);
+
+    auto scorer = pipeline.make_scorer();
+    algorithms::hbond::HBondFinder finder(chem);
+    const auto ss = scorer.score_structure(selected, structure, finder, chem, typing);
+
+    // Residues in a helical cWW canonical (G-C/A-U) pair — the pucker check's context.
+    static const std::unordered_set<std::string> kWc = {"G-C", "C-G", "A-U", "U-A"};
+    const auto chains = algorithms::RNAChains::from_structure(structure);
+    const auto in_helix = algorithms::selection::helix_membership(selected, chains);
+    std::unordered_set<std::string> helical_wc_res;
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+        const auto& sc = selected[i];
+        if (!in_helix[i] || sc.lw_class != "cWW") continue;
+        const std::string bp = typing.normalize(sc.res_name1) + "-" + typing.normalize(sc.res_name2);
+        if (!kWc.count(bp)) continue;
+        helical_wc_res.insert(sc.res_id1);
+        helical_wc_res.insert(sc.res_id2);
+    }
+
+    for (const auto& rs : ss.residue_scores) {
+        if (!rs.delta || !rs.pperp) continue;
+        const int helical = helical_wc_res.count(rs.res_id) ? 1 : 0;
+        std::printf("%s\t%.2f\t%.3f\t%d\n", rs.res_id.c_str(), *rs.delta, *rs.pperp, helical);
+    }
     return 0;
 }
 

@@ -85,8 +85,11 @@ char face_from_lw(const std::string& lw, int which) {
     return 'W';
 }
 
-// resolve_for_selection (MUTATES c.lw_class). Returns slots to claim or nullopt.
-std::optional<SlotSet> resolve_for_selection(Cand& c, const SlotSet& used) {
+// resolve_for_selection: pick the free edge-slots to claim, read-only on the class.
+// The LW class is finalized at classification (edge_classifier); selection never
+// rewrites it, so an ambiguous "X|Y" pair stays "X|Y" in the output. Taking `c` by
+// const ref makes that read-only guarantee compiler-enforced. Returns slots or nullopt.
+std::optional<SlotSet> resolve_for_selection(const Cand& c, const SlotSet& used) {
     const std::string lw = c.lw_class;
     const std::string& r1 = c.res_id1;
     const std::string& r2 = c.res_id2;
@@ -103,7 +106,8 @@ std::optional<SlotSet> resolve_for_selection(Cand& c, const SlotSet& used) {
     }
     if (avail.empty()) return std::nullopt;
     if (avail.size() == 1) {
-        c.lw_class = std::get<0>(avail[0]);  // resolve
+        // Only one branch's edges are free: claim them for exclusivity, but leave the
+        // class untouched — classification is the final word on it.
         return SlotSet{{r1, std::get<1>(avail[0])}, {r2, std::get<2>(avail[0])}};
     }
     SlotSet slots;
