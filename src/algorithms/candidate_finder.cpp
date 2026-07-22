@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 #include <unordered_map>
 
 namespace pairfinder::algorithms {
@@ -27,6 +29,27 @@ std::string extract_res_name(const std::string& res_id) {
         res_id.substr(p1 + 1, (p2 == std::string::npos ? res_id.size() : p2) - p1 - 1);
     if (name.size() == 2 && name[0] == 'D') return name.substr(1);
     return name;
+}
+
+// Same-chain adjacent residues (|i-j| == 1) cannot form a real base pair — they
+// are backbone-connected neighbours (stacked), not paired. Excluded here at
+// candidate generation so they never become candidates. (Identical parsing to
+// selection::same_chain_adjacent; the equivalent Python filter is being moved
+// from selection to candidate generation to match.)
+bool same_chain_adjacent(const std::string& a, const std::string& b) {
+    auto split = [](const std::string& r, std::string& chain, long& num) {
+        const auto p2 = r.rfind('-');
+        if (p2 == std::string::npos || p2 == 0) return false;
+        const auto p1 = r.rfind('-', p2 - 1);
+        if (p1 == std::string::npos) return false;
+        chain = r.substr(0, p1);
+        try { num = std::stol(r.substr(p2 + 1)); } catch (...) { return false; }
+        return true;
+    };
+    std::string c1, c2;
+    long n1 = 0, n2 = 0;
+    if (!split(a, c1, n1) || !split(b, c2, n2)) return false;
+    return c1 == c2 && std::abs(n1 - n2) == 1;
 }
 
 }  // namespace
@@ -143,6 +166,9 @@ std::vector<PairCandidate> find_candidates(
                 }
         std::sort(nbrs.begin(), nbrs.end());  // (i asc, j asc) order preserved
         for (int j : nbrs) {
+            // Adjacency is a candidate-generation exclusion: same-chain neighbours
+            // are backbone-stacked, never a base pair.
+            if (same_chain_adjacent(*nodes[i].res_id, *nodes[j].res_id)) continue;
             PairCandidate c;
             c.res_id1 = *nodes[i].res_id;
             c.res_id2 = *nodes[j].res_id;

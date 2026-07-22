@@ -422,6 +422,7 @@ const std::pair<const char*, DumpFn> kDumpCommands[] = {
     {"dump-classified", pfcli::dump_classified},
     {"dump-scored", pfcli::dump_scored},
     {"dump-pairs", pfcli::dump_pairs},
+    {"dump-selection", pfcli::dump_selection},
     {"dump-scores", pfcli::dump_scores},
     {"dump-structure", pfcli::dump_structure},
     {"dump-torsions", pfcli::dump_torsions},

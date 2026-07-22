@@ -30,6 +30,29 @@ std::vector<classification::ScoredCandidate> select_pairs(
     std::vector<classification::ScoredCandidate> candidates, const RNAChains& chains,
     double min_score = 0.0);
 
+/// Per-candidate selection disposition (why a candidate is / isn't in the final
+/// output). Runs the REAL select_pairs to determine the selected set, then tags
+/// every input candidate with the actual production cause using the same
+/// predicates select_pairs uses — so downstream tools (e.g. the DSSR comparison
+/// harness) read the true reason instead of reimplementing selection.
+///   selected    — in the final selected output
+///   invalid     — validation.is_valid == false
+///   stacking    — removed by the stacking-signature pre-filter
+///   low_score   — quality_score < min_score
+///   adjacent    — same-chain adjacent residues (phase-2 skip)
+///   ineligible  — fails class_valid (no strong base H-bond / SS / HH gate)
+///   competition — eligible, but displaced by a better pair (helix phase or MWIS)
+struct SelectionDisposition {
+    std::string res_id1;
+    std::string res_id2;
+    std::string lw_class;
+    std::string disposition;
+};
+
+std::vector<SelectionDisposition> select_pairs_dispositions(
+    std::vector<classification::ScoredCandidate> candidates, const RNAChains& chains,
+    double min_score = 0.0);
+
 }  // namespace pairfinder::algorithms::selection
 
 #endif  // PAIRFINDER_ALGORITHMS_SELECTION_HPP
