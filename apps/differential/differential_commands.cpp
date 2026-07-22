@@ -253,6 +253,32 @@ int dump_pairs(const std::string& path) {
     return 0;
 }
 
+// Per-candidate selection disposition: WHY each candidate is / isn't in the
+// final selected output, decided by the REAL production selection (no proxy).
+// Emits "<res_a>\t<res_b>\t<lw>\t<disposition>" sorted. Dispositions:
+//   selected | invalid | stacking | low_score | adjacent | ineligible | competition
+int dump_selection(const std::string& path) {
+    using namespace pairfinder;
+    Pipeline pipeline(cli_pipeline_config());
+    auto prep = pipeline.prepare(path);
+    auto scored = pipeline.classify(prep);
+    const auto chains = algorithms::RNAChains::from_structure(prep.structure);
+    const auto disp = algorithms::selection::select_pairs_dispositions(std::move(scored), chains);
+
+    std::vector<std::string> rows;
+    for (const auto& d : disp) {
+        const std::string ki = d.res_id1 < d.res_id2 ? d.res_id1 : d.res_id2;
+        const std::string kj = d.res_id1 < d.res_id2 ? d.res_id2 : d.res_id1;
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "%s\t%s\t%s\t%s", ki.c_str(), kj.c_str(),
+                      d.lw_class.empty() ? "None" : d.lw_class.c_str(), d.disposition.c_str());
+        rows.emplace_back(buf);
+    }
+    std::sort(rows.begin(), rows.end());
+    for (const auto& r : rows) std::cout << r << '\n';
+    return 0;
+}
+
 // Full scoring pass (classify + score + O2 correction) over all valid candidates.
 // Emits "<res_a>\t<res_b>\t<pair_cat>\t<lw>\t<rmsd>\t<quality>\t<num_hb>\t<strong>\t
 //        <display>\t<conf_csv>\t<is_amb>\t<precorr>" sorted by valid base-base candidates.

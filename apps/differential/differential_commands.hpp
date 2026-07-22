@@ -23,6 +23,7 @@ int dump_lwclass(const std::string& path);     ///< LW edge classification
 int dump_classified(const std::string& path);  ///< full classification + confidence
 int dump_scored(const std::string& path);      ///< full per-candidate scoring pass
 int dump_pairs(const std::string& path);       ///< selected pairs
+int dump_selection(const std::string& path);   ///< per-candidate selection disposition
 int dump_scores(const std::string& path);      ///< empirical per-pair scores
 int dump_structure(const std::string& path);   ///< whole-structure score
 int dump_torsions(const std::string& path);    ///< backbone suite torsions

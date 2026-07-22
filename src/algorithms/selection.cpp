@@ -227,7 +227,9 @@ constexpr double kMinIsolatedQuality = 0.45;
 std::vector<Cand*> cww_helix_phase(const std::vector<Cand*>& cww, const RNAChains& ch) {
     std::vector<Cand*> canonical;
     for (Cand* c : cww)
-        if (!same_chain_adjacent(c->res_id1, c->res_id2) && c->has_strong_base_hbond)
+        // Adjacency is now excluded at candidate generation (candidate_finder), so
+        // no adjacent pair reaches selection; only the strong-H-bond gate remains.
+        if (c->has_strong_base_hbond)
             canonical.push_back(c);
     if (canonical.empty()) return {};
     std::vector<Cand*> helix_cands;
@@ -400,7 +402,7 @@ std::vector<Cand*> global_optimal(const std::vector<Cand*>& input, double min_sc
     std::vector<Cand*> valid;
     for (Cand* c : input) {
         if (!c->validation.is_valid || c->quality_score < min_score) continue;
-        if (same_chain_adjacent(c->res_id1, c->res_id2)) continue;
+        // (adjacency excluded upstream at candidate generation)
         if (class_valid(*c, c->lw_class)) valid.push_back(c);
         else if (!c->precorr_lw.empty() && class_valid(*c, c->precorr_lw)) valid.push_back(c);
     }
@@ -572,6 +574,45 @@ std::vector<ScoredCandidate> select_pairs(std::vector<ScoredCandidate> candidate
     out.reserve(phase1.size() + phase2.size());
     for (Cand* c : phase1) out.push_back(*c);
     for (Cand* c : phase2) out.push_back(*c);
+    return out;
+}
+
+std::vector<SelectionDisposition> select_pairs_dispositions(
+    std::vector<ScoredCandidate> candidates, const RNAChains& chains, double min_score) {
+    // Canonical order-independent key for a residue pair.
+    auto key = [](const std::string& a, const std::string& b) {
+        return a < b ? a + "\x1f" + b : b + "\x1f" + a;
+    };
+    // The REAL selected set: run production select_pairs on a copy.
+    std::vector<ScoredCandidate> copy = candidates;
+    const auto selected = select_pairs(std::move(copy), chains, min_score);
+    std::unordered_set<std::string> sel;
+    for (const auto& s : selected) sel.insert(key(s.res_id1, s.res_id2));
+
+    // Tag every candidate with the actual production cause, mirroring the exact
+    // filter cascade of select_pairs / global_optimal using the same predicates.
+    std::vector<SelectionDisposition> out;
+    out.reserve(candidates.size());
+    for (const Cand& c : candidates) {
+        std::string disp;
+        if (sel.count(key(c.res_id1, c.res_id2))) {
+            disp = "selected";
+        } else if (!c.validation.is_valid) {
+            disp = "invalid";
+        } else if (is_stacking_signature(c)) {
+            disp = "stacking";
+        } else if (c.quality_score < min_score) {
+            disp = "low_score";
+        } else if (same_chain_adjacent(c.res_id1, c.res_id2)) {
+            disp = "adjacent";
+        } else if (!(class_valid(c, c.lw_class) ||
+                     (!c.precorr_lw.empty() && class_valid(c, c.precorr_lw)))) {
+            disp = "ineligible";
+        } else {
+            disp = "competition";
+        }
+        out.push_back({c.res_id1, c.res_id2, c.lw_class, std::move(disp)});
+    }
     return out;
 }
 
