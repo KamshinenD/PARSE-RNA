@@ -180,6 +180,7 @@ SuiteResult RichardsonClassifier::classify(const std::array<double, 7>& suite) c
     const std::string g = m.gamma(suite[5]);
     if (pdm == 0 || pd == 0 || g.empty()) return out;
     const std::string bin = std::to_string(pdm) + std::to_string(pd) + g;
+    out.bin = bin;  // recorded once triage+sieve pass, even for outliers below
     const auto it = m.by_bin.find(bin);
     if (it == m.by_bin.end() || it->second.empty()) return out;
 

@@ -122,6 +122,20 @@ struct ResidueScore {
     std::optional<PuckerOutlier> pucker_outlier;  ///< set only when δ/Pperp disagree
 };
 
+/// Full per-residue backbone torsion row (mirror of extract_backbone_torsions.py
+/// torsions_all.csv): every residue with a valid 7D suite, including outliers,
+/// captured before the RNA-only / L-RNA scoring filters. Populated only when
+/// score_structure is called with collect_backbone=true.
+struct BackboneTorsion {
+    std::string res_id;
+    std::string base_type;  ///< normalized (PSU->U, ...)
+    std::optional<double> alpha, beta, gamma, delta, epsilon, zeta;
+    std::string conformer;  ///< "!!" for outliers
+    double suiteness = 0.0;
+    std::string suite_bin;  ///< empty -> null on emit
+    bool is_outlier = true;
+};
+
 /// Per-axis structure scores. `pairs_score` and `residues_score` are reported
 /// separately (different scales / quality axes). `overall` (w_pairs·pairs +
 /// w_residues·residues, MI-derived weights ~0.65/0.35) is still computed but
@@ -134,6 +148,7 @@ struct StructureScore {
     int skipped_pairs = 0;  ///< selected pairs that were not scorable
     std::vector<PairScore> pair_scores;
     std::vector<ResidueScore> residue_scores;
+    std::vector<BackboneTorsion> backbone_torsions;  ///< populated only when collect_backbone
 
     /// Count of scored pairs per triage tier (mirror of Python tier_summary()).
     struct TierSummary { int preferred = 0, acceptable = 0, review = 0; };
@@ -168,10 +183,13 @@ public:
                          const core::BaseTyping& typing) const;
 
     /// Whole-structure score: pair scores + residue suiteness + overall.
+    /// collect_backbone=true also fills StructureScore::backbone_torsions with a
+    /// full per-residue torsion row (for --details torsions_all reproduction).
     StructureScore score_structure(const std::vector<classification::ScoredCandidate>& selected,
                                    const core::Structure& structure, hbond::HBondFinder& finder,
                                    const hbond::HBondChemistry& chem,
-                                   const core::BaseTyping& typing) const;
+                                   const core::BaseTyping& typing,
+                                   bool collect_backbone = false) const;
 
     double w_pairs() const;
     double w_residues() const;

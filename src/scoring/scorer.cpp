@@ -27,6 +27,7 @@
 
 #include <pairfinder/algorithms/rna_chains.hpp>
 #include <pairfinder/algorithms/selection.hpp>
+#include <pairfinder/scoring/hbond_angles.hpp>
 #include <pairfinder/scoring/pair_parameters.hpp>
 #include <pairfinder/scoring/richardson.hpp>
 #include <pairfinder/scoring/torsions.hpp>
@@ -69,7 +70,6 @@ const char* pucker_label(int p) { return p == 3 ? "C3'-endo" : "C2'-endo"; }
 // Cerny severity thresholds.
 constexpr double kProscoPreferred  = 5.0;   // ProSco >= 5 -> Preferred, severity = 0
 constexpr double kZprimeThreshold  = 5.0;   // |Z'| = 5 -> severity = 1
-constexpr double kPi = 3.14159265358979323846;
 
 // Backbone recommendation thresholds (mirror backbone_scorer.py).
 constexpr double kLowSuitenessMax     = 0.5;  // suiteness below -> residue flagged
@@ -164,32 +164,8 @@ std::string prosco_tier(std::optional<double> prosco, std::optional<double> zpri
     return std::abs(*zprime) <= kZprimeThreshold ? "Allowed" : "Of Concern";
 }
 
-// ---- H-bond angle geometry (hbond_angles.py) ----
-double angle_at_atom(const Vector3d& neighbor, const Vector3d& atom, const Vector3d& partner) {
-    const Vector3d v1 = neighbor - atom, v2 = partner - atom;
-    const double n1 = v1.norm(), n2 = v2.norm();
-    if (n1 < 1e-10 || n2 < 1e-10) return 0.0;
-    double c = v1.dot(v2) / (n1 * n2);
-    c = std::max(-1.0, std::min(1.0, c));
-    return std::acos(c) * 180.0 / kPi;
-}
-
-std::optional<double> hbond_angle(const core::Residue& res, const std::string& atom_name,
-                                  const Vector3d& atom_pos, const Vector3d& partner_pos,
-                                  const hbond::HBondChemistry& chem) {
-    const std::vector<std::string>* nbrs = &chem.connectivity(res.base_type(), atom_name);
-    if (nbrs->empty() && !res.base_type().empty())
-        nbrs = &chem.connectivity(res.base_type().substr(0, 1), atom_name);
-    if (nbrs->empty()) return std::nullopt;
-    std::optional<double> best;
-    for (const auto& nn : *nbrs) {
-        const core::Atom* na = res.get_atom(nn);
-        if (!na) continue;
-        const double a = angle_at_atom(na->coords, atom_pos, partner_pos);
-        if (!best || a > *best) best = a;
-    }
-    return best;
-}
+// H-bond angle geometry (angle_at_atom / hbond_angle) lives in the shared
+// header scoring/hbond_angles.hpp so the CLI per-pair emitter uses it too.
 
 struct HBF {
     double distance;
@@ -614,7 +590,7 @@ bool is_dna_residue(const std::string& res_id) {
 StructureScore Scorer::score_structure(
     const std::vector<classification::ScoredCandidate>& selected, const core::Structure& structure,
     hbond::HBondFinder& finder, const hbond::HBondChemistry& chem,
-    const core::BaseTyping& typing) const {
+    const core::BaseTyping& typing, bool collect_backbone) const {
     std::unordered_map<std::string, const core::Residue*> res_by_id;
     for (const auto& chain : structure.chains())
         for (const auto& res : chain.residues()) res_by_id[res.res_id()] = &res;
@@ -664,10 +640,26 @@ StructureScore Scorer::score_structure(
         ss.pair_scores.push_back(std::move(ps));
     }
     for (const auto& [rid, t] : tors) {
-        if (is_dna_residue(rid)) continue;  // RNA-only backbone score (see helper)
         const auto suite = build_suite(rid, tors, pred_index);
         if (!suite) continue;
         const SuiteResult sr = impl_->richardson->classify(*suite);
+        // Full torsion row for every classifiable residue (incl. DNA, outliers,
+        // L-RNA) — captured before the RNA-only / L-RNA scoring filters below so
+        // it mirrors extract_backbone_torsions.py (torsions_all.csv).
+        if (collect_backbone) {
+            BackboneTorsion bt;
+            bt.res_id = rid;
+            if (const auto rit = res_by_id.find(rid); rit != res_by_id.end())
+                bt.base_type = typing.normalize(rit->second->base_type());
+            bt.alpha = t.alpha; bt.beta = t.beta; bt.gamma = t.gamma;
+            bt.delta = t.delta; bt.epsilon = t.epsilon; bt.zeta = t.zeta;
+            bt.conformer = sr.conformer;
+            bt.suiteness = sr.suiteness;
+            bt.suite_bin = sr.bin;
+            bt.is_outlier = sr.is_outlier;
+            ss.backbone_torsions.push_back(std::move(bt));
+        }
+        if (is_dna_residue(rid)) continue;  // RNA-only backbone score (see helper)
         if (sr.suiteness <= 0.0) {
             // L-RNA enantiomer check: a rejected suite may be mirror-image RNA
             // (e.g. a Spiegelmer aptamer). Negate every torsion (360 - t) and

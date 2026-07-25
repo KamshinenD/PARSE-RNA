@@ -5,10 +5,14 @@
 #include <pairfinder/algorithms/candidate_finder.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <unordered_map>
+
+#include <pairfinder/core/residue.hpp>
 
 namespace pairfinder::algorithms {
 
@@ -50,6 +54,46 @@ bool same_chain_adjacent(const std::string& a, const std::string& b) {
     long n1 = 0, n2 = 0;
     if (!split(a, c1, n1) || !split(b, c2, n2)) return false;
     return c1 == c2 && std::abs(n1 - n2) == 1;
+}
+
+// --- ring-centroid stacking signature -------------------------------------
+// A candidate is "ring-stacked" when the vector between the two base RING
+// centroids is offset more ALONG the mean base normal (vertical) than in the
+// base plane (lateral) — i.e. one base sits over the other. Unlike the
+// dNN-based is_stacking_signature, this is class-independent and works for the
+// sugar-edge classes (cWS/cSS/tWS) where real pairs have low dNN by design.
+// Threshold from the /tmp prototype: cuts ~5.4% of DSSR-absent "novel" pairs
+// (the stacks) at ~0.005% cost to DSSR-confirmed pairs.
+constexpr double kRingStackVertMin = 2.8;
+
+std::optional<Vector3d> ring_centroid(const core::Residue& res) {
+    static const std::array<const char*, 9> purine = {"N9", "C8", "N7", "C5", "C6",
+                                                      "N1", "C2", "N3", "C4"};
+    static const std::array<const char*, 6> pyrim = {"N1", "C2", "N3", "C4", "C5", "C6"};
+    Vector3d sum{};
+    int n = 0;
+    auto add = [&](const char* nm) {
+        if (const core::Atom* a = res.get_atom(nm)) { sum = sum + a->coords; ++n; }
+    };
+    if (core::is_purine(res.base_type()))
+        for (const char* nm : purine) add(nm);
+    else
+        for (const char* nm : pyrim) add(nm);
+    if (n < 3) return std::nullopt;
+    return sum / static_cast<double>(n);
+}
+
+bool is_ring_stacked(const Vector3d& c1, const Vector3d& c2,
+                     const core::ReferenceFrame& f1, const core::ReferenceFrame& f2) {
+    Vector3d zave = f1.z_axis().dot(f2.z_axis()) > 0 ? f1.z_axis() + f2.z_axis()
+                                                     : f2.z_axis() - f1.z_axis();
+    const double zl = zave.norm();
+    if (zl < 1e-10) return false;
+    zave = zave / zl;
+    const Vector3d vec = c2 - c1;
+    const double vert = std::abs(vec.dot(zave));
+    const double lat = std::sqrt(std::max(0.0, vec.dot(vec) - vert * vert));
+    return vert > lat && vert > kRingStackVertMin;
 }
 
 }  // namespace
@@ -102,11 +146,13 @@ std::vector<PairCandidate> find_candidates(
         const core::ReferenceFrame* frame;
         Vector3d gly;
         bool has_gly;
+        Vector3d ring;      ///< base ring centroid (for the stacking signature)
+        bool has_ring;
     };
     std::vector<Node> nodes;
     nodes.reserve(frames.size());
     for (const auto& [res_id, frame] : frames) {
-        Node n{&res_id, &frame, {}, false};
+        Node n{&res_id, &frame, {}, false, {}, false};
         const auto it = res_by_id.find(res_id);
         if (it != res_by_id.end()) {
             const std::string name = typing.glycosidic_n_name(it->second->base_type());
@@ -115,6 +161,10 @@ std::vector<PairCandidate> find_candidates(
                     n.gly = a->coords;
                     n.has_gly = true;
                 }
+            }
+            if (const auto rc = ring_centroid(*it->second)) {
+                n.ring = *rc;
+                n.has_ring = true;
             }
         }
         nodes.push_back(n);
@@ -176,6 +226,14 @@ std::vector<PairCandidate> find_candidates(
             c.res_name2 = extract_res_name(c.res_id2);
             c.validation = validate_pair(*nodes[i].frame, *nodes[j].frame, nodes[i].gly,
                                          nodes[j].gly, thr);
+            if (nodes[i].has_ring && nodes[j].has_ring)
+                c.validation.ring_stacked = is_ring_stacked(
+                    nodes[i].ring, nodes[j].ring, *nodes[i].frame, *nodes[j].frame);
+            // Stacking is a GEOMETRY exclusion (like d_v/plane/dNN): a ring-stacked
+            // pair is not a base pair, so it never becomes a valid candidate. (This
+            // is class-independent, unlike selection::is_stacking_signature which is
+            // per-class and must run after classification.)
+            if (c.validation.ring_stacked) c.validation.is_valid = false;
             out.push_back(std::move(c));
         }
     }

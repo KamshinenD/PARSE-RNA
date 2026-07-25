@@ -9,9 +9,5 @@
     "buckle": 10.8098,
     "shear": 5.1558,
     "incorrect_hbond_count": 2.8871
-  },
-  "bucket_weights": {
-    "W_PAIRS": 0.6502,
-    "W_RESIDUES": 0.3498
   }
 }

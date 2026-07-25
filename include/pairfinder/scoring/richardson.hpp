@@ -29,6 +29,7 @@ struct SuiteResult {
     double suiteness = 0.0;  ///< 0..1, 0 for outliers
     bool is_outlier = true;
     double distance = -1.0;  ///< 7D L3 distance to the matched center (-1 if none)
+    std::string bin;         ///< pucker-pucker-gamma bin ("33p"); empty if triage/sieve fail
 };
 
 /// Signed minimal angular gap value-center in (-180, 180]. Positive => rotate
