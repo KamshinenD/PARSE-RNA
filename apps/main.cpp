@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -31,6 +32,8 @@
 #include <pairfinder/core/reference_frame.hpp>
 #include <pairfinder/geometry/vector3d.hpp>
 #include <pairfinder/pipeline.hpp>
+#include <pairfinder/scoring/hbond_angles.hpp>
+#include <pairfinder/scoring/pair_parameters.hpp>
 #include <pairfinder/scoring/scorer.hpp>
 
 #include "support/cli_support.hpp"
@@ -141,7 +144,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         auto scorer = pipeline.make_scorer();
         algorithms::hbond::HBondFinder sfinder(pipeline.chem());
         ss = scorer.score_structure(selected, prep.structure, sfinder, pipeline.chem(),
-                                    pipeline.typing());
+                                    pipeline.typing(), /*collect_backbone=*/details);
         for (const auto& ps : ss.pair_scores)
             score_by_key[ps.res_id1 + '\x01' + ps.res_id2] = &ps;
         lap("score_structure");
@@ -153,12 +156,24 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
     out["candidates_valid"] = candidates_valid;
     out["n_pairs"] = static_cast<int>(selected.size());
 
+    // For --details per-pair H-bond geometry: residue lookup + a finder to
+    // re-run between paired residues (the candidate keeps only counts).
+    std::unordered_map<std::string, const core::Residue*> res_by_id;
+    if (details)
+        for (const auto& chain : prep.structure.chains())
+            for (const auto& res : chain.residues()) res_by_id[res.res_id()] = &res;
+    algorithms::hbond::HBondFinder hb_finder(pipeline.chem());
+
     json pairs = json::array();
     for (const auto& sc : selected) {
         json p;
         p["res_id1"] = sc.res_id1;
         p["res_id2"] = sc.res_id2;
         p["sequence"] = sc.res_name1 + sc.res_name2;
+        // Normalized parent base-pair type ("C-G"), matching the scoring-table
+        // key and pairs.csv bp_type (modified bases -> parent, e.g. CBR -> C).
+        p["bp_type"] = pipeline.typing().normalize(sc.res_name1) + "-" +
+                       pipeline.typing().normalize(sc.res_name2);
         p["pair_category"] = sc.pair_category;
         p["num_hbonds"] = sc.num_hbonds;
         p["hbond_categories"] = sc.hbond_categories;
@@ -178,7 +193,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                              {"dNN", round_to(v.dNN, 4)}};
 
         if (sc.frame1 && sc.frame2) {
-            const auto rb = algorithms::compute_rigid_body_parameters(*sc.frame1, *sc.frame2);
+            const auto rb = scoring::compute_pair_parameters(*sc.frame1, *sc.frame2);
             p["rigid_body"] = json{{"shear", round_to(rb.shear, 4)},
                                    {"stretch", round_to(rb.stretch, 4)},
                                    {"stagger", round_to(rb.stagger, 4)},
@@ -194,6 +209,41 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             else if (std::isinf(*sc.template_rmsd)) p["template_rmsd"] = "Infinity";
             else p["template_rmsd"] = round_to(*sc.template_rmsd, 4);
             p["quality_score"] = round_to(sc.quality_score, 4);
+
+            // Per-pair H-bond geometry: re-run the finder between the paired
+            // residues and emit every bond (distance + donor/acceptor angle +
+            // slot alignment). Mirrors extract_pair_features.py so the feature
+            // CSVs can be regenerated from the engine.
+            if (scoring::Scorer::is_scorable(sc)) {
+                const auto r1 = res_by_id.find(sc.res_id1);
+                const auto r2 = res_by_id.find(sc.res_id2);
+                if (r1 != res_by_id.end() && r2 != res_by_id.end()) {
+                    const core::Residue& res1 = *r1->second;
+                    const core::Residue& res2 = *r2->second;
+                    json hbonds = json::array();
+                    for (const auto& hb : hb_finder.find_between(res1, res2)) {
+                        const core::Residue& dres = (hb.donor_res_id == sc.res_id1) ? res1 : res2;
+                        const core::Residue& ares = (hb.donor_res_id == sc.res_id1) ? res2 : res1;
+                        const core::Atom* da = dres.get_atom(hb.donor_atom);
+                        const core::Atom* aa = ares.get_atom(hb.acceptor_atom);
+                        std::optional<double> d_ang, a_ang;
+                        if (da && aa) {
+                            d_ang = scoring::hbond_angle(dres, hb.donor_atom, da->coords,
+                                                         aa->coords, pipeline.chem());
+                            a_ang = scoring::hbond_angle(ares, hb.acceptor_atom, aa->coords,
+                                                         da->coords, pipeline.chem());
+                        }
+                        hbonds.push_back(json{
+                            {"donor_atom", hb.donor_atom},
+                            {"acceptor_atom", hb.acceptor_atom},
+                            {"distance", round_to(hb.distance, 4)},
+                            {"donor_angle", d_ang ? json(round_to(*d_ang, 4)) : json(nullptr)},
+                            {"acceptor_angle", a_ang ? json(round_to(*a_ang, 4)) : json(nullptr)},
+                            {"slot_alignment", round_to(hb.alignment_score, 4)}});
+                    }
+                    p["hbonds"] = hbonds;
+                }
+            }
         }
 
         if (score) {
@@ -284,6 +334,28 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                 {"deviations", std::move(devs)}});
         }
         out["backbone_residues"] = std::move(backbone_residues);
+
+        // Full per-residue backbone torsions (--details only): one row per
+        // classifiable residue, mirroring extract_backbone_torsions.py so
+        // torsions_all.csv can be regenerated from the engine.
+        if (details) {
+            auto ang = [](const std::optional<double>& v) {
+                return v ? json(round_to(*v, 4)) : json(nullptr);
+            };
+            json bt = json::array();
+            for (const auto& r : ss.backbone_torsions) {
+                bt.push_back(json{
+                    {"res_id", r.res_id},
+                    {"base_type", r.base_type},
+                    {"alpha", ang(r.alpha)}, {"beta", ang(r.beta)}, {"gamma", ang(r.gamma)},
+                    {"delta", ang(r.delta)}, {"epsilon", ang(r.epsilon)}, {"zeta", ang(r.zeta)},
+                    {"conformer", r.conformer},
+                    {"suiteness", round_to(r.suiteness, 3)},
+                    {"suite_bin", r.suite_bin.empty() ? json(nullptr) : json(r.suite_bin)},
+                    {"is_outlier", r.is_outlier}});
+            }
+            out["backbone_torsions"] = std::move(bt);
+        }
         // Report-only ribose pucker OUTLIERS (δ disagrees with Pperp), structure-level.
         json pucker_outliers = json::array();
         for (const auto& rs : ss.residue_scores) {

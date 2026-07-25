@@ -46,6 +46,12 @@ struct ValidationResult {
     bool plane_angle_check = false;
     bool dNN_check = false;
     bool is_valid = false;
+    /// Ring-centroid stacking signature (class-independent): one base sits over
+    /// the other (centroid offset larger ALONG the mean base normal than in-plane).
+    /// A more discriminating stacking detector than the dNN-based
+    /// is_stacking_signature; catches stacks in classes that one cannot
+    /// (cWS/cSS/tWS/tWH), where real S-edge pairs have low dNN by design.
+    bool ring_stacked = false;
 };
 
 /// A validated pair candidate.
