@@ -26,6 +26,7 @@
 #include <gemmi/mmread.hpp>
 #include <gemmi/model.hpp>
 
+#include <pairfinder/core/base_typing.hpp>
 #include <pairfinder/core/nucleotide_registry.hpp>
 #include <pairfinder/core/resource_locator.hpp>
 #include <pairfinder/core/residue.hpp>
@@ -37,6 +38,14 @@ namespace {
 std::string upper(std::string s) {
     for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return s;
+}
+
+// The ligand H-bond DB's nucleotide typing, loaded once. The registry below
+// covers frame templates; this covers everything the rest of the pipeline can
+// type, and the two disagree on ~64 codes.
+const core::BaseTyping& base_typing() {
+    static const core::BaseTyping typing(resources::config("ligand_hbond_db.json").string());
+    return typing;
 }
 
 // modified_nucleotides.json: env PARSE_NT_CONFIG, else the bundled resource.
@@ -95,7 +104,16 @@ core::Structure parse_pdb(const std::filesystem::path& path) {
             // waters/ligands dropped (find_pair_2 default include_hetatm=false).
             if (is_hetatm) {
                 if (is_water(res_name)) continue;
-                if (!nucleotide_registry().lookup(res_name).has_value()) continue;
+                // Keep if EITHER registry knows it. modified_nucleotides.json
+                // drives frame-template selection and misses ~64 codes the
+                // ligand DB types as RNA/DNA (U37, U8U, M3X, SRA, ...). Dropping
+                // those does not just lose one residue: it breaks the chain, so
+                // the neighbours lose their predecessor and no suite can be
+                // built. 4J7M scored 0 residues that way against a deposited
+                // rnasuiteness of 0.75.
+                if (!nucleotide_registry().lookup(res_name).has_value() &&
+                    !base_typing().is_known_nucleotide(res_name))
+                    continue;
             }
 
             const long seq = residue.seqid.num.value;

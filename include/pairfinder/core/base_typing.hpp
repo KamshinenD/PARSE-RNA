@@ -19,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace pairfinder::core {
 
@@ -39,6 +40,23 @@ public:
     bool is_purine(std::string_view base_type) const;
     bool is_pyrimidine(std::string_view base_type) const;
 
+    /// True when the residue is DNA, including modified DNA whose name carries
+    /// no ``D`` prefix (2'-fluoro AF2/GF2/CFZ/UFT, BRU, ...). Data-driven from
+    /// the ligand DB ``type`` field, with the literal DA/DC/DG/DT/DU names as a
+    /// floor so the answer stays sane if the DB could not be read.
+    bool is_dna(std::string_view residue_name) const;
+
+    /// True when the residue name is a nucleotide the ligand DB knows: standard
+    /// bases, the DNA prefix names, the curated modified map, or anything typed
+    /// RNA/DNA in the DB. Used by the parser to decide whether a HETATM record
+    /// is a nucleotide worth keeping.
+    bool is_known_nucleotide(std::string_view residue_name) const;
+
+    /// True for a free nucleotide/cofactor the ligand DB types LIGAND rather
+    /// than RNA/DNA (ATP, GTP, UTP, CTP, ...). Such a residue can pair, but it
+    /// is not a polymer residue and carries no RNA backbone suite.
+    bool is_ligand(std::string_view residue_name) const;
+
     /// Glycosidic-N atom name (N9 purine / N1 pyrimidine / C5 pseudouridine),
     /// or "" if unknown. Mirrors GLYCOSIDIC_N with the normalize fallback.
     std::string glycosidic_n_name(std::string_view base_type) const;
@@ -53,6 +71,8 @@ private:
     bool load_cache(const std::filesystem::path& path);
 
     std::unordered_map<std::string, std::string> extended_;  ///< from ligand DB
+    std::unordered_set<std::string> dna_codes_;              ///< ligand DB type == "DNA"
+    std::unordered_set<std::string> ligand_codes_;           ///< ligand DB type == "LIGAND"
 };
 
 }  // namespace pairfinder::core

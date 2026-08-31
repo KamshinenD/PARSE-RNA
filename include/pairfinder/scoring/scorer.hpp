@@ -23,6 +23,7 @@
 #include <pairfinder/core/base_typing.hpp>
 #include <pairfinder/core/residue.hpp>
 #include <pairfinder/core/structure.hpp>
+#include <pairfinder/scoring/clashes.hpp>
 
 namespace pairfinder::scoring {
 
@@ -42,13 +43,13 @@ struct IssuePenalty {
 };
 
 /// Pair-score triage tiers — global, data-derived cutoffs (mirror of
-/// scoring/result.py::pair_tier). Acceptable spans [75, 100); below is Review.
-constexpr double kTierAcceptableMin = 75.0;
+/// scoring/result.py::pair_tier). Acceptable spans [80, 100); below is Review.
+constexpr double kTierAcceptableMin = 80.0;
 
 /// Triage tier for a pair score:
 ///   "Preferred"  = 100     (every scored parameter in its Preferred/ProSco≥5 region)
-///   "Acceptable" = [75,100) (minor strain, no review needed)
-///   "Review"     = <75      (2.5× enriched in poorly-refined structures)
+///   "Acceptable" = [80,100) (minor strain, no review needed)
+///   "Review"     = <80      (worth a manual look)
 /// Global rather than per-LW-class: all 12 LW medians are 100 and per-(class,bp)
 /// ProSco/Z' normalization already removes the "non-canonical is harder" effect.
 inline std::string pair_tier(double score) {
@@ -85,6 +86,12 @@ struct PairScore {
     double penalty = 0.0;
     std::vector<IssuePenalty> issues;  ///< triggered issues, sorted by descending penalty
     std::vector<UnusualPucker> unusual_pucker;  ///< report-only (helical C2'-endo)
+    /// Worst SCORED heavy-atom overlap between the two residues (A), signed:
+    /// negative when cleanly separated. This is the RAW feature behind the
+    /// `clash` severity, emitted so downstream weight fitting can recompute
+    /// severity itself; it is NOT thresholded (see clashes.hpp). nullopt when
+    /// either residue has no heavy atoms.
+    std::optional<double> clash_overlap;
 
     /// Triage tier derived from `score` (Preferred/Acceptable/Review).
     std::string tier() const { return pair_tier(score); }
@@ -137,18 +144,21 @@ struct BackboneTorsion {
 };
 
 /// Per-axis structure scores. `pairs_score` and `residues_score` are reported
-/// separately (different scales / quality axes). `overall` (w_pairs·pairs +
-/// w_residues·residues, MI-derived weights ~0.65/0.35) is still computed but
-/// intentionally not emitted by the CLI — an "overall" label overclaims
+/// separately: they are on different scales and measure different quality axes.
+/// There is deliberately no combined "overall" — such a label overclaims
 /// whole-structure quality (clashscore, bond geometry, etc. are not considered).
 struct StructureScore {
-    double overall = 0.0;  ///< computed, not emitted (see struct doc)
     double pairs_score = 0.0;
     double residues_score = 0.0;
     int skipped_pairs = 0;  ///< selected pairs that were not scorable
     std::vector<PairScore> pair_scores;
     std::vector<ResidueScore> residue_scores;
     std::vector<BackboneTorsion> backbone_torsions;  ///< populated only when collect_backbone
+    /// Every RNA-RNA steric clash in the structure, worst first — including
+    /// clashes between residues that are not a base pair. Report-only at the
+    /// structure level; the per-pair `clash` parameter is what affects scores.
+    /// Protein contacts are deliberately excluded (see clashes.hpp).
+    std::vector<ClashContact> clashes;
 
     /// Count of scored pairs per triage tier (mirror of Python tier_summary()).
     struct TierSummary { int preferred = 0, acceptable = 0, review = 0; };
@@ -173,8 +183,10 @@ public:
     ~Scorer();
     Scorer(Scorer&&) noexcept;
 
-    /// _is_scorable: base-base, not ambiguous, single (no '|') lw_class.
-    static bool is_scorable(const classification::ScoredCandidate& pair);
+    /// _is_scorable: base-base, not ambiguous, single (no '|') lw_class, and
+    /// neither residue DNA (the scoring tables are calibrated on RNA).
+    static bool is_scorable(const classification::ScoredCandidate& pair,
+                            const core::BaseTyping& typing);
 
     /// Score one scorable pair (Step 8a). res1/res2 in the pair's residue order.
     PairScore score_pair(const classification::ScoredCandidate& pair,
@@ -182,7 +194,7 @@ public:
                          hbond::HBondFinder& finder, const hbond::HBondChemistry& chem,
                          const core::BaseTyping& typing) const;
 
-    /// Whole-structure score: pair scores + residue suiteness + overall.
+    /// Whole-structure score: pair scores + residue suiteness.
     /// collect_backbone=true also fills StructureScore::backbone_torsions with a
     /// full per-residue torsion row (for --details torsions_all reproduction).
     StructureScore score_structure(const std::vector<classification::ScoredCandidate>& selected,
@@ -190,9 +202,6 @@ public:
                                    const hbond::HBondChemistry& chem,
                                    const core::BaseTyping& typing,
                                    bool collect_backbone = false) const;
-
-    double w_pairs() const;
-    double w_residues() const;
 
 private:
     struct Impl;

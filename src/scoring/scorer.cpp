@@ -11,6 +11,8 @@
  */
 #include <pairfinder/scoring/scorer.hpp>
 
+#include <pairfinder/scoring/clashes.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -87,10 +89,10 @@ const std::unordered_set<std::string> kWcDistanceCells = {"C-G/cWW", "A-U/cWW"};
 constexpr double kMinPhysicalDistance = 2.2;  // below this: not a real H-bond
 constexpr double kMaxStrongDistance   = 3.5;  // strong (primary) bond cutoff
 
-// 9 individual parameters — mirrors Python ISSUE_KEYS.
-const std::array<const char*, 9> kIssueKeys = {
+// 10 individual parameters — mirrors Python ISSUE_KEYS.
+const std::array<const char*, 10> kIssueKeys = {
     "shear", "stretch", "stagger", "buckle", "propeller", "opening",
-    "distance", "hbond_angles", "incorrect_hbond_count"};
+    "distance", "hbond_angles", "incorrect_hbond_count", "clash"};
 
 // canonicalize_bp -> (canonical_bp, swapped).
 std::pair<std::string, bool> canonicalize_bp(const std::string& bp, const std::string& lw) {
@@ -133,15 +135,30 @@ std::vector<double> distances_to_score(const std::vector<double>& distances,
     return {*std::min_element(strong.begin(), strong.end())};
 }
 
-/// Cerny severity: 0 if ProSco >= 5 (Preferred); else min(1, |Z'|/5).
+/// Cerny severity, ramped continuously off the Preferred boundary:
+///
+///     severity = min(1, |Z'|/5) * clamp((5 - ProSco) / 5, 0, 1)
+///
+/// The plain Cerny form (0 if ProSco >= 5, else min(1,|Z'|/5)) is a STEP: the
+/// two gates are redundant, so by the time ProSco falls below 5 a typical
+/// cell's |Z'| is already ~2.4-3.0 and severity jumps 0 -> ~0.5 with nothing
+/// between. A pair was therefore either exactly 100 or had already paid 3-5
+/// points, leaving 96-100 unreachable (0.05% of canonical cWW pairs).
+///
+/// The (5 - ProSco)/5 factor is 0 exactly at the boundary and 1 once ProSco
+/// reaches 0, so severity eases in from zero and reduces to the plain Cerny
+/// value in the far tail -- the region the method actually calibrates.
+///
 /// None ProSco -> 0 (no penalty when cell unavailable).
-/// None Z' with ProSco < 5 -> 1 (maximum severity: outside distribution, no Z' data).
+/// None Z' with ProSco < 5 -> the ramp alone (was: maximum severity).
+/// Mirrors _severity_from_prosco_zprime in scoring/issues.py.
 double severity_from_prosco_zprime(std::optional<double> prosco,
                                    std::optional<double> zprime) {
-    if (!prosco) return 0.0;
-    if (*prosco >= kProscoPreferred) return 0.0;
-    if (!zprime) return 1.0;
-    return std::min(1.0, std::abs(*zprime) / kZprimeThreshold);
+    if (!prosco || *prosco >= kProscoPreferred) return 0.0;
+    const double ramp =
+        std::min(1.0, std::max(0.0, (kProscoPreferred - *prosco) / kProscoPreferred));
+    if (!zprime) return ramp;
+    return std::min(1.0, std::abs(*zprime) / kZprimeThreshold) * ramp;
 }
 
 /// Severity plus the ProSco/Z' that produced it (kept for per-issue reporting).
@@ -180,7 +197,6 @@ struct Scorer::Impl {
     json categorical;  // categorical_distributions
     json bb_prosco;    // backbone prosco_distributions["backbone"] (per-conformer torsion)
     std::unordered_map<std::string, double> pair_weights;
-    double w_pairs = 0.5, w_residues = 0.5;
     std::unique_ptr<RichardsonClassifier> richardson;
 
     /// ProSco bin lookup with bp/lw -> _ANY/lw -> _ANY/_ANY fallback.
@@ -378,22 +394,36 @@ Scorer::Scorer(const std::filesystem::path& distributions_path,
         for (const char* k : kIssueKeys)
             impl_->pair_weights[k] = total <= 0 ? 100.0 / kIssueKeys.size()
                                                 : raw.value(k, 0.0) * 100.0 / total;
-        if (d.contains("bucket_weights")) {
-            impl_->w_pairs    = d["bucket_weights"].value("W_PAIRS",    0.5);
-            impl_->w_residues = d["bucket_weights"].value("W_RESIDUES", 0.5);
-        }
     }
 }
 
 Scorer::~Scorer() = default;
 Scorer::Scorer(Scorer&&) noexcept = default;
-double Scorer::w_pairs() const { return impl_->w_pairs; }
-double Scorer::w_residues() const { return impl_->w_residues; }
 
-bool Scorer::is_scorable(const classification::ScoredCandidate& p) {
+namespace {
+/// Residue name out of a "<chain>-<name>-<seq>" res_id.
+std::string res_name_of(const std::string& res_id) {
+    const auto a = res_id.find('-');
+    if (a == std::string::npos) return {};
+    const auto b = res_id.find('-', a + 1);
+    return res_id.substr(a + 1, (b == std::string::npos ? res_id.size() : b) - a - 1);
+}
+}  // namespace
+
+bool Scorer::is_scorable(const classification::ScoredCandidate& p,
+                         const core::BaseTyping& typing) {
     if (p.pair_category != "base-base") return false;
     if (p.is_ambiguous) return false;
     if (p.lw_class.empty() || p.lw_class.find('|') != std::string::npos) return false;
+    // DNA is not scored: the ProSco/Z' cells, the canonical H-bond counts and
+    // the penalty weights are all calibrated on RNA. A pair is excluded when
+    // EITHER side is DNA, so RNA-DNA hybrid pairs are excluded too. Matches
+    // the backbone side, which already skips DNA (see no_rna_suite).
+    // Excluded here rather than at candidate generation so the pair is still
+    // found, classified and emitted with a null score — same convention as an
+    // ambiguous pair — and counted in skipped_pairs.
+    if (typing.is_dna(res_name_of(p.res_id1))) return false;
+    if (typing.is_dna(res_name_of(p.res_id2))) return false;
     return true;
 }
 
@@ -477,6 +507,22 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
         if (s > 0.0) issues["incorrect_hbond_count"] = SevDetail{s, std::nullopt, std::nullopt};
     }
 
+    // ---- Steric clash: graded on heavy-atom overlap (no ProSco/Z') ----
+    // Only a contact past kClashThreshold is a clash. Scoring the UNGATED
+    // overlap charges score for ordinary van der Waals proximity and dilutes
+    // the parameter, whose 2.7x good/poor enrichment is measured at
+    // overlap > kClashThreshold.
+    //
+    // worst_overlap() is the same worst SCORED contact pair_clash() gates on,
+    // so applying the threshold here is equivalent and computes the contact
+    // once. The raw value is kept on the PairScore as the feature behind the
+    // severity. Mirrors features.py (pair_clash) + issues.py.
+    const std::optional<double> clash_overlap = worst_overlap(res1, res2);
+    if (clash_overlap && *clash_overlap > kClashThreshold) {
+        const double s = clash_severity(*clash_overlap);
+        if (s > 0.0) issues["clash"] = SevDetail{s, std::nullopt, std::nullopt};
+    }
+
     // Build weighted penalty list in kIssueKeys order, then sort by descending penalty.
     std::vector<IssuePenalty> weighted;
     double penalty = 0.0;
@@ -484,7 +530,11 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
         const auto it = issues.find(k);
         if (it == issues.end()) continue;
         const SevDetail& d = it->second;
-        const double w = impl_->pair_weights.at(k) * d.severity;
+        // A weights file generated before `clash` existed simply has no entry:
+        // treat it as weight 0 (detected and reported, but costs no score)
+        // rather than throwing.
+        const auto wit = impl_->pair_weights.find(k);
+        const double w = (wit == impl_->pair_weights.end() ? 0.0 : wit->second) * d.severity;
         IssuePenalty ip;
         ip.issue = k;
         ip.weight = w;
@@ -508,18 +558,30 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
     out.score   = std::max(0.0, std::min(100.0, 100.0 - penalty));
     out.penalty = penalty;
     out.issues  = std::move(weighted);
+    out.clash_overlap = clash_overlap;
     return out;
 }
 
 namespace {
 
+// Longest O3'(i-1) - P(i) accepted as the phosphodiester bond joining two
+// residues into one suite. Real links are extremely tight: over a 300-structure
+// sample the median is 1.60 A and the 99th percentile 1.62 A, with only 0.06%
+// above 2.0 A. Those stragglers are not stretched bonds, they are residues that
+// are not joined at all.
+constexpr double kMaxPhosphodiester = 2.0;
+
 // Map each res_id to its backbone predecessor's res_id: the residue
 // immediately preceding it within the same chain, ordered by (seq, icode),
 // when their integer sequence numbers differ by at most one (equal when only
-// the insertion code advances, e.g. 20 -> 20A -> 21). Mirrors the Python
-// features.build_predecessor_index. Negative seqs / insertion codes included.
+// the insertion code advances, e.g. 20 -> 20A -> 21) AND the two are actually
+// bonded. Numbering alone is not enough: 1HMH labels separate strands with the
+// same numbers plus an 'L' suffix, so 48 of its 87 suites were being built
+// between residues 26 to 40 A apart, which classify as outliers and dragged its
+// suiteness from the deposited 0.66 down to 0.283.
 std::unordered_map<std::string, std::string> build_predecessor_index(
-    const std::unordered_map<std::string, ResidueTorsions>& tors) {
+    const std::unordered_map<std::string, ResidueTorsions>& tors,
+    const std::unordered_map<std::string, const core::Residue*>& res_by_id) {
     std::map<std::string, std::vector<std::tuple<long, std::string, std::string>>> by_chain;
     for (const auto& [rid, t] : tors) {
         (void)t;
@@ -534,8 +596,17 @@ std::unordered_map<std::string, std::string> build_predecessor_index(
         for (std::size_t i = 1; i < residues.size(); ++i) {
             const long prev_num = std::get<0>(residues[i - 1]);
             const long cur_num  = std::get<0>(residues[i]);
-            if (prev_num == cur_num || prev_num == cur_num - 1)
-                predecessor[std::get<2>(residues[i])] = std::get<2>(residues[i - 1]);
+            if (prev_num != cur_num && prev_num != cur_num - 1) continue;
+            const std::string& prev_id = std::get<2>(residues[i - 1]);
+            const std::string& cur_id  = std::get<2>(residues[i]);
+            const auto pit = res_by_id.find(prev_id);
+            const auto cit = res_by_id.find(cur_id);
+            if (pit == res_by_id.end() || cit == res_by_id.end()) continue;
+            const auto* o3 = pit->second->get_atom("O3'");
+            const auto* ph = cit->second->get_atom("P");
+            if (!o3 || !ph) continue;
+            if ((o3->coords - ph->coords).norm() > kMaxPhosphodiester) continue;
+            predecessor[cur_id] = prev_id;
         }
     }
     return predecessor;
@@ -573,16 +644,24 @@ double round2(double v) { return std::round(v * 100.0) / 100.0; }
 // DNA residues have no RNA backbone suite — exclude them so they don't deflate
 // residues_score for DNA/RNA complexes (matches the wwPDB rnasuiteness RNA-only
 // convention and the Python backbone scorer). res_id is chain-resname-num
-// (e.g. N-DA-102); DNA resnames are two-letter D<base>.
-bool is_dna_residue(const std::string& res_id) {
+// (e.g. N-DA-102).
+//
+// The test is data-driven rather than name-based: modified DNA carries no ``D``
+// prefix (2'-fluoro AF2/GF2/CFZ/UFT, BRU, ...), and matching only D<base> let
+// those through to be scored as RNA. 3P4A is built entirely from 2'-fluoro
+// residues, so it scored 0.811 while the wwPDB — correctly, for an RNA-only
+// metric — reports 0.
+// A residue carries an RNA backbone suite only if it is a polymer nucleotide.
+// DNA has no RNA suite, and a free nucleotide or cofactor (ATP, GTP, ... typed
+// LIGAND in the ligand DB) is not a polymer residue at all: it may still pair,
+// which is why it is parsed, but it has no place in an RNA backbone score.
+bool no_rna_suite(const std::string& res_id, const core::BaseTyping& typing) {
     const auto a = res_id.find('-');
     if (a == std::string::npos) return false;
     const auto b = res_id.find('-', a + 1);
     const std::string name =
         res_id.substr(a + 1, (b == std::string::npos ? res_id.size() : b) - a - 1);
-    return name.size() == 2 && name[0] == 'D' &&
-           (name[1] == 'A' || name[1] == 'C' || name[1] == 'G' ||
-            name[1] == 'T' || name[1] == 'U');
+    return typing.is_dna(name) || typing.is_ligand(name);
 }
 
 }  // namespace
@@ -596,7 +675,7 @@ StructureScore Scorer::score_structure(
         for (const auto& res : chain.residues()) res_by_id[res.res_id()] = &res;
 
     const auto tors       = compute_all_torsions(structure);
-    const auto pred_index = build_predecessor_index(tors);
+    const auto pred_index = build_predecessor_index(tors, res_by_id);
     // 3'-successor (invert predecessor) for the Pperp phosphate, and helix
     // membership over the selected pairs — both drive the report-only sugar
     // pucker flags (do not affect the score).
@@ -609,7 +688,7 @@ StructureScore Scorer::score_structure(
     StructureScore ss;
     for (std::size_t i = 0; i < selected.size(); ++i) {
         const auto& sc = selected[i];
-        if (!is_scorable(sc)) { ++ss.skipped_pairs; continue; }
+        if (!is_scorable(sc, typing)) { ++ss.skipped_pairs; continue; }
         const auto r1 = res_by_id.find(sc.res_id1);
         const auto r2 = res_by_id.find(sc.res_id2);
         if (r1 == res_by_id.end() || r2 == res_by_id.end()) continue;
@@ -617,7 +696,7 @@ StructureScore Scorer::score_structure(
         // "Unusual sugar pucker": C2'-endo (by δ) in a helical cWW G-C/A-U pair.
         if (in_helix[i] && ps.lw_class == "cWW" && kHelicalWcBp.count(ps.bp_type)) {
             for (const core::Residue* res : {r1->second, r2->second}) {
-                if (is_dna_residue(res->res_id())) continue;  // DNA is natively C2'-endo
+                if (no_rna_suite(res->res_id(), typing)) continue;  // DNA is natively C2'-endo
                 const auto tit = tors.find(res->res_id());
                 if (tit == tors.end() || !tit->second.delta) continue;
                 const double delta = *tit->second.delta;
@@ -659,7 +738,16 @@ StructureScore Scorer::score_structure(
             bt.is_outlier = sr.is_outlier;
             ss.backbone_torsions.push_back(std::move(bt));
         }
-        if (is_dna_residue(rid)) continue;  // RNA-only backbone score (see helper)
+        if (no_rna_suite(rid, typing)) continue;  // RNA-only backbone score (see helper)
+        // ...and the suite's delta/epsilon/zeta come from the PREDECESSOR, so a
+        // residue whose 5' neighbour is not RNA polymer has no RNA suite either.
+        // 3P4C/3P4D alternate RNA with 2'-fluoro residues, so every suite there
+        // was scored off a DNA sugar; 6E0O/4HOS/4HOR begin with an initiating
+        // ATP/UTP/CTP, which is covalently linked but is a free nucleotide, not
+        // a polymer residue. The wwPDB reports ~0 for both cases.
+        if (const auto pit = pred_index.find(rid);
+            pit != pred_index.end() && no_rna_suite(pit->second, typing))
+            continue;
         if (sr.suiteness <= 0.0) {
             // L-RNA enantiomer check: a rejected suite may be mirror-image RNA
             // (e.g. a Spiegelmer aptamer). Negate every torsion (360 - t) and
@@ -717,16 +805,16 @@ StructureScore Scorer::score_structure(
     const double rm = mean(ss.residue_scores, [](const ResidueScore& r) { return r.score; });
     ss.pairs_score    = round2(pm);
     ss.residues_score = round2(rm);
-    double overall;
-    if (!ss.pair_scores.empty() && !ss.residue_scores.empty())
-        overall = impl_->w_pairs * pm + impl_->w_residues * rm;
-    else if (!ss.pair_scores.empty())
-        overall = pm;
-    else if (!ss.residue_scores.empty())
-        overall = rm;
-    else
-        overall = 0.0;
-    ss.overall = round2(overall);
+
+    // Whole-structure RNA-RNA clashes (report-only; includes residues that are
+    // not a base pair). structure_clashes takes an owning map, so build one
+    // from the parsed chains.
+    {
+        std::unordered_map<std::string, core::Residue> owned;
+        owned.reserve(res_by_id.size());
+        for (const auto& [rid, res] : res_by_id) owned.emplace(rid, *res);
+        ss.clashes = structure_clashes(owned, typing);
+    }
     return ss;
 }
 

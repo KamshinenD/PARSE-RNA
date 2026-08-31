@@ -92,7 +92,7 @@ int dump_scores(const std::string& path) {
 
     std::vector<std::string> rows;
     for (const auto& sc : selected) {
-        if (!scoring::Scorer::is_scorable(sc)) continue;
+        if (!scoring::Scorer::is_scorable(sc, typing)) continue;
         const core::Residue* r1 = res_by_id.count(sc.res_id1) ? res_by_id[sc.res_id1] : nullptr;
         const core::Residue* r2 = res_by_id.count(sc.res_id2) ? res_by_id[sc.res_id2] : nullptr;
         if (!r1 || !r2) continue;
@@ -147,7 +147,7 @@ int dump_torsions(const std::string& path) {
 
 // Whole-structure score (Cerny method).
 // Emits:
-//   "OVERALL\t<overall>\t<pairs_score>\t<residues_score>"
+//   "SCORES\t<pairs_score>\t<residues_score>"
 //   "PAIR\t<res_a>\t<res_b>\t<lw_class>\t<score>\t<penalty>\t<issues>"  (sorted)
 //   "RES\t<res_id>\t<score>"                                             (sorted)
 int dump_structure(const std::string& path) {
@@ -164,7 +164,7 @@ int dump_structure(const std::string& path) {
     algorithms::hbond::HBondFinder finder(chem);
     const auto ss = scorer.score_structure(selected, structure, finder, chem, typing);
 
-    std::printf("OVERALL\t%.2f\t%.2f\t%.2f\n", ss.overall, ss.pairs_score, ss.residues_score);
+    std::printf("SCORES\t%.2f\t%.2f\n", ss.pairs_score, ss.residues_score);
 
     std::vector<std::string> rows;
     for (const auto& ps : ss.pair_scores) {

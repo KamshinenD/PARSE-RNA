@@ -54,6 +54,7 @@ const std::unordered_map<std::string, std::string> kReportGroup = {
     {"distance",              "H-Bond Distance"},
     {"hbond_angles",          "H-Bond Angles"},
     {"incorrect_hbond_count", "Incorrect H-Bond Count"},
+    {"clash",                 "Steric Clash"},
 };
 
 // ---- Step 9: full `find` pipeline -> JSON (parity with cli/find_pairs.py) ----
@@ -214,7 +215,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             // residues and emit every bond (distance + donor/acceptor angle +
             // slot alignment). Mirrors extract_pair_features.py so the feature
             // CSVs can be regenerated from the engine.
-            if (scoring::Scorer::is_scorable(sc)) {
+            if (scoring::Scorer::is_scorable(sc, pipeline.typing())) {
                 const auto r1 = res_by_id.find(sc.res_id1);
                 const auto r2 = res_by_id.find(sc.res_id2);
                 if (r1 != res_by_id.end() && r2 != res_by_id.end()) {
@@ -256,10 +257,10 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                 json iss = json::array();
                 // Per-issue Černý provenance (ProSco / Z' / tier) for downstream
                 // highlighting; same order as "issues" (descending penalty).
-                json details = json::array();
+                json issue_rows = json::array();
                 for (const auto& ip : it->second->issues) {
                     iss.push_back(ip.issue);
-                    details.push_back(json{
+                    issue_rows.push_back(json{
                         {"issue", ip.issue},
                         {"severity", round_to(ip.severity, 4)},
                         {"prosco", ip.prosco ? json(round_to(*ip.prosco, 4)) : json(nullptr)},
@@ -267,7 +268,14 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                         {"tier", ip.tier}});
                 }
                 p["issues"] = std::move(iss);
-                p["issue_details"] = std::move(details);
+                p["issue_details"] = std::move(issue_rows);
+                // Raw worst scored heavy-atom overlap (A), the feature behind
+                // the `clash` severity. Ungated and unsaturated, so downstream
+                // weight fitting can recompute severity from it.
+                if (details) {
+                    const auto& ov = it->second->clash_overlap;
+                    p["clash_overlap"] = ov ? json(round_to(*ov, 4)) : json(nullptr);
+                }
                 // Report-only "unusual sugar pucker" (helical cWW C2'-endo).
                 if (!it->second->unusual_pucker.empty()) {
                     json ups = json::array();
@@ -295,16 +303,28 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
     if (emit_classified) out["classified"] = std::move(classified);
 
     if (score) {
-        // "overall_score" intentionally not emitted: pair-geometry and backbone
-        // scores live on different scales / measure different axes, and an
-        // "overall" label overclaims whole-structure quality (clashscore, bond
-        // geometry, etc. are not considered). Reported separately below.
-        // `ss.overall` is still computed; uncomment to revive.
-        // out["overall_score"] = round_to(ss.overall, 2);
-        out["pairs_score"] = round_to(ss.pairs_score, 2);
+        // There is deliberately no combined "overall_score": pair-geometry and
+        // backbone scores live on different scales / measure different axes, and
+        // an "overall" label overclaims whole-structure quality (clashscore,
+        // bond geometry, etc. are not considered). Reported separately below.
+        // null when no pair could be scored: that is "unmeasured", not
+        // "worst possible pairs". Selected-but-unscorable pairs (DNA,
+        // ambiguous) leave n_pairs > 0 with an empty pair_scores, and the
+        // mean of an empty list is 0.0 — reporting that pins the structure
+        // to the bottom of every correlation. Mirrors backbone_suiteness.
+        if (ss.pair_scores.empty())
+            out["pairs_score"] = nullptr;
+        else
+            out["pairs_score"] = round_to(ss.pairs_score, 2);
         // Mean Richardson suiteness as a 0-1 fraction (wwPDB RNA-suiteness
         // convention). Internally residues_score is 0-100, so scale down here.
-        out["backbone_suiteness"] = round_to(ss.residues_score / 100.0, 3);
+        // null when no residue could be scored: that is "unmeasured", not
+        // "worst possible backbone", and reporting 0.0 pins such structures to
+        // the bottom of every correlation. Mirrors pairs_score for n_pairs == 0.
+        if (ss.residue_scores.empty())
+            out["backbone_suiteness"] = nullptr;
+        else
+            out["backbone_suiteness"] = round_to(ss.residues_score / 100.0, 3);
         // Pair triage tier counts (Preferred/Acceptable/Review) — mirror of
         // Python StructureScore.tier_summary(). Always all three keys.
         const auto ts = ss.tier_summary();
@@ -313,6 +333,18 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             {"Acceptable", ts.acceptable},
             {"Review", ts.review}};
         out["tier_summary"] = tier_summary;
+        // Whole-structure RNA-RNA steric clashes (report-only; includes
+        // residues that are not a base pair). Protein contacts are excluded by
+        // design — see scoring/clashes.hpp.
+        json clashes = json::array();
+        for (const auto& c : ss.clashes) {
+            clashes.push_back(json{{"res_id1", c.res_id1}, {"atom1", c.atom1},
+                                   {"res_id2", c.res_id2}, {"atom2", c.atom2},
+                                   {"distance", round_to(c.distance, 2)},
+                                   {"overlap", round_to(c.overlap, 2)}});
+        }
+        out["n_clashes"] = static_cast<int>(ss.clashes.size());
+        out["clashes"] = std::move(clashes);
         // Per-residue backbone recommendations (flagged residues only): which
         // torsions to correct toward which conformer. Suiteness stays the score.
         json backbone_residues = json::array();
@@ -380,8 +412,12 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                 }
             }
             out["score_details"] = json{
-                {"pairs_score", round_to(ss.pairs_score, 2)},
-                {"backbone_suiteness", round_to(ss.residues_score / 100.0, 3)},
+                {"pairs_score", ss.pair_scores.empty()
+                                   ? json(nullptr)
+                                   : json(round_to(ss.pairs_score, 2))},
+                {"backbone_suiteness", ss.residue_scores.empty()
+                                           ? json(nullptr)
+                                           : json(round_to(ss.residues_score / 100.0, 3))},
                 {"tier_summary", tier_summary},
                 {"issue_summary", summary},
                 {"n_scored_pairs", static_cast<int>(ss.pair_scores.size())},

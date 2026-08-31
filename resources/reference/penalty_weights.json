@@ -1,13 +1,14 @@
 {
   "penalty_weights": {
-    "stagger": 18.8096,
-    "hbond_angles": 13.3629,
-    "stretch": 12.6462,
-    "opening": 12.419,
-    "distance": 12.1265,
-    "propeller": 11.7832,
-    "buckle": 10.8098,
-    "shear": 5.1558,
-    "incorrect_hbond_count": 2.8871
+    "clash": 16.4018,
+    "stagger": 15.6899,
+    "hbond_angles": 11.9319,
+    "distance": 10.5707,
+    "stretch": 10.5694,
+    "propeller": 10.1746,
+    "opening": 9.9994,
+    "buckle": 9.453,
+    "shear": 2.975,
+    "incorrect_hbond_count": 2.2342
   }
 }

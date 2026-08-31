@@ -92,7 +92,18 @@ BaseTyping::BaseTyping(const std::filesystem::path& ligand_db_path, bool use_cac
     for (const auto& [code, entry] : db.items()) {
         if (code == "_metadata" || !entry.is_object()) continue;
         const std::string type = entry.value("type", std::string{});
+        // Free nucleotides and cofactors (ATP, GTP, ...) are typed LIGAND. They
+        // are recorded so the backbone scorer can refuse to build a suite on
+        // them; they are deliberately NOT added to the parent map below.
+        if (type == "LIGAND") {
+            ligand_codes_.insert(code);
+            continue;
+        }
         if (type != "RNA" && type != "DNA") continue;
+        // Record DNA-ness before the parent is collapsed to its RNA equivalent
+        // below: normalize() wants DT -> U for base identity, but callers that
+        // ask "is this DNA" must still be able to tell them apart.
+        if (type == "DNA") dna_codes_.insert(code);
 
         if (entry.contains("parent") && entry["parent"].is_string()) {
             const std::string parent = entry["parent"].get<std::string>();
@@ -109,8 +120,17 @@ BaseTyping::BaseTyping(const std::filesystem::path& ligand_db_path, bool use_cac
 }
 
 void BaseTyping::save_cache(const std::filesystem::path& path) const {
-    nlohmann::json root = nlohmann::json::object();
-    for (const auto& [code, parent] : extended_) root[code] = parent;
+    nlohmann::json parents = nlohmann::json::object();
+    for (const auto& [code, parent] : extended_) parents[code] = parent;
+    nlohmann::json dna = nlohmann::json::array();
+    for (const auto& code : std::set<std::string>(dna_codes_.begin(), dna_codes_.end()))
+        dna.push_back(code);
+    nlohmann::json lig = nlohmann::json::array();
+    for (const auto& code : std::set<std::string>(ligand_codes_.begin(), ligand_codes_.end()))
+        lig.push_back(code);
+    nlohmann::json root = {{"parents", std::move(parents)},
+                           {"dna", std::move(dna)},
+                           {"ligand", std::move(lig)}};
     std::ofstream out(path);
     out << root.dump(2) << "\n";
 }
@@ -125,13 +145,55 @@ bool BaseTyping::load_cache(const std::filesystem::path& path) {
         return false;
     }
     if (!root.is_object()) return false;
+    // Cache layout is {"parents": {code: parent}, "dna": [code, ...]}. An older
+    // cache is a bare code->parent map with no DNA set; reject it so the caller
+    // re-parses the ligand DB rather than silently losing modified-DNA typing.
+    if (!root.contains("parents") || !root.contains("dna") || !root.contains("ligand"))
+        return false;
+    if (!root["parents"].is_object() || !root["dna"].is_array() ||
+        !root["ligand"].is_array())
+        return false;
+
     std::unordered_map<std::string, std::string> table;
-    for (auto it = root.begin(); it != root.end(); ++it) {
+    for (auto it = root["parents"].begin(); it != root["parents"].end(); ++it) {
         if (!it->is_string()) return false;
         table[it.key()] = it->get<std::string>();
     }
+    std::unordered_set<std::string> dna;
+    for (const auto& v : root["dna"]) {
+        if (!v.is_string()) return false;
+        dna.insert(v.get<std::string>());
+    }
+    std::unordered_set<std::string> lig;
+    for (const auto& v : root["ligand"]) {
+        if (!v.is_string()) return false;
+        lig.insert(v.get<std::string>());
+    }
     extended_ = std::move(table);
+    dna_codes_ = std::move(dna);
+    ligand_codes_ = std::move(lig);
     return true;
+}
+
+bool BaseTyping::is_known_nucleotide(std::string_view residue_name) const {
+    const std::string name = upper_strip(residue_name);
+    if (in(name, {"A", "G", "C", "U", "T", "I", "P"})) return true;
+    if (dna_prefix_map().count(name) || curated_map().count(name)) return true;
+    return extended_.count(name) > 0;
+}
+
+bool BaseTyping::is_ligand(std::string_view residue_name) const {
+    return ligand_codes_.count(upper_strip(residue_name)) > 0;
+}
+
+bool BaseTyping::is_dna(std::string_view residue_name) const {
+    const std::string name = upper_strip(residue_name);
+    // Floor: the literal DNA names, so this never regresses below the old
+    // name-based test even when the ligand DB is unavailable.
+    if (name.size() == 2 && name[0] == 'D' &&
+        in(std::string(1, name[1]), {"A", "C", "G", "T", "U"}))
+        return true;
+    return dna_codes_.count(name) > 0;
 }
 
 std::string BaseTyping::normalize(std::string_view residue_name) const {
