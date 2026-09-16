@@ -3,7 +3,7 @@
  * @brief Expected LW H-bond patterns (template REMARK 7 + curated dict) and
  *        matching, for the intrinsic confidence H-bond term.
  *
- * Port of hbond/patterns.py + hbond/template_patterns.py: prefers patterns parsed
+ * Prefers patterns parsed
  * from the idealized templates' REMARK 7 records (geometric fallback otherwise),
  * falling back to the hand-curated HBOND_PATTERNS table.
  */

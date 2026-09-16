@@ -2,8 +2,8 @@
  * @file pdb_parser.cpp
  * @brief GEMMI-backed structure loader (PDB / mmCIF / .gz).
  *
- * Replicates find_pair_2's GEMMI parser conventions (io/{pdb,cif}_parser.cpp)
- * so the parsed Structure matches its pdb_atoms JSON exactly:
+ * Replicates the reference parser conventions so the parsed Structure matches
+ * the reference pdb_atoms JSON exactly:
  *   - first model only
  *   - chain = gemmi chain name; seq = auth seqid.num; insertion code appended
  *   - alt-loc filter: keep ' ' / 'A' / '1' only (drops B-only atoms)
@@ -63,10 +63,10 @@ bool is_water(const std::string& name) {
     return kWaters.count(upper(name)) != 0;
 }
 
-// keep alt-loc ' ', '\0', 'A', '1' (find_pair_2 check_alt_loc_filter)
+// keep alt-loc ' ', '\0', 'A', '1'
 bool keep_altloc(char a) { return a == ' ' || a == '\0' || a == 'A' || a == '1'; }
 
-// find_pair_2 atom-name exact matches, applied to the trimmed GEMMI name after
+// Atom-name exact matches, applied to the trimmed GEMMI name after
 // '*'->'\'' replacement. Returns the normalized (trimmed) atom name.
 std::string normalize_atom(std::string name) {
     for (char& c : name)
@@ -101,7 +101,7 @@ core::Structure parse_pdb(const std::filesystem::path& path) {
             const std::string res_name = residue.name;
             const bool is_hetatm = (residue.het_flag == 'H');
             // HETATM kept only for modified nucleotides (standard ATOM always kept);
-            // waters/ligands dropped (find_pair_2 default include_hetatm=false).
+            // waters/ligands dropped (HETATM included only for modified bases).
             if (is_hetatm) {
                 if (is_water(res_name)) continue;
                 // Keep if EITHER registry knows it. modified_nucleotides.json

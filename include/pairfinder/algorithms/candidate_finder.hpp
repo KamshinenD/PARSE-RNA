@@ -5,8 +5,7 @@
  * For every residue pair whose frame origins are within max_distance, computes
  * the frame-based geometry (origin distance, vertical separation along the mean
  * helix axis, base-plane angle, glycosidic-N distance, direction cosines) and
- * the validation flags against ValidationThresholds. Mirrors Python
- * finder/cache.py PairCache._find_candidates + validation/{validator,metrics}.
+ * the validation flags against ValidationThresholds.
  */
 #ifndef PAIRFINDER_ALGORITHMS_CANDIDATE_FINDER_HPP
 #define PAIRFINDER_ALGORITHMS_CANDIDATE_FINDER_HPP
@@ -21,7 +20,7 @@
 
 namespace pairfinder::algorithms {
 
-/// Default geometric validation thresholds (core/constants.py).
+/// Default geometric validation thresholds.
 struct ValidationThresholds {
     double max_dorg = 15.0;
     double max_d_v = 2.5;

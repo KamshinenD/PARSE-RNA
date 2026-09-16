@@ -31,7 +31,7 @@ bool in(const std::string& s, std::initializer_list<const char*> set) {
     return false;
 }
 
-// Curated MODIFIED_BASE_MAP (constants.py) — takes precedence over the DB map.
+// Curated MODIFIED_BASE_MAP - takes precedence over the DB map.
 const std::unordered_map<std::string, std::string>& curated_map() {
     static const std::unordered_map<std::string, std::string> m = {
         {"2MG", "G"}, {"7MG", "G"}, {"M2G", "G"}, {"OMG", "G"}, {"YG", "G"},
@@ -41,14 +41,14 @@ const std::unordered_map<std::string, std::string>& curated_map() {
     return m;
 }
 
-// DNA_PREFIX_MAP (constants.py): DT -> T here (NOT U).
+// DNA_PREFIX_MAP: DT -> T here (NOT U).
 const std::unordered_map<std::string, std::string>& dna_prefix_map() {
     static const std::unordered_map<std::string, std::string> m = {
         {"DA", "A"}, {"DG", "G"}, {"DC", "C"}, {"DT", "T"}};
     return m;
 }
 
-// GLYCOSIDIC_N (constants.py).
+// GLYCOSIDIC_N.
 const std::unordered_map<std::string, std::string>& glycosidic_map() {
     static const std::unordered_map<std::string, std::string> m = {
         {"A", "N9"}, {"G", "N9"}, {"I", "N9"}, {"C", "N1"}, {"U", "N1"},

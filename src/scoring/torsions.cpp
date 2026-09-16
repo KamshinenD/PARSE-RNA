@@ -1,6 +1,6 @@
 /**
  * @file torsions.cpp
- * @brief Backbone torsions (port of torsions.py compute_all_torsions).
+ * @brief Backbone torsions.
  */
 #include <pairfinder/scoring/torsions.hpp>
 
@@ -68,7 +68,7 @@ ResidueTorsions compute_one(const Residue* res, const Residue* prev, const Resid
     return t;
 }
 
-// Sort key matching Python torsions.sort_key: (chain, seq, icode) via
+// Sort key: (chain, seq, icode) via
 // parse_res_seq, falling back to (chain-before-first-'-', 0, "") on failure.
 std::tuple<std::string, long, std::string> sort_key(const std::string& res_id) {
     if (const auto p = parse_res_seq(res_id)) return {p->chain, p->num, p->icode};

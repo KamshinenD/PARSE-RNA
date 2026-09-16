@@ -1,6 +1,6 @@
 /**
  * @file confidence.cpp
- * @brief Intrinsic LW confidence (v3 two-term) — port of quality_intrinsic.py.
+ * @brief Intrinsic LW confidence (v3 two-term).
  */
 #include <pairfinder/algorithms/confidence.hpp>
 

@@ -35,11 +35,11 @@ std::string extract_res_name(const std::string& res_id) {
     return name;
 }
 
-// Same-chain adjacent residues (|i-j| == 1) cannot form a real base pair — they
+// Same-chain adjacent residues (|i-j| == 1) cannot form a real base pair - they
 // are backbone-connected neighbours (stacked), not paired. Excluded here at
 // candidate generation so they never become candidates. (Identical parsing to
-// selection::same_chain_adjacent; the equivalent Python filter is being moved
-// from selection to candidate generation to match.)
+// selection::same_chain_adjacent, which applies the same rule later in the
+// pipeline.)
 bool same_chain_adjacent(const std::string& a, const std::string& b) {
     auto split = [](const std::string& r, std::string& chain, long& num) {
         const auto p2 = r.rfind('-');
@@ -59,7 +59,7 @@ bool same_chain_adjacent(const std::string& a, const std::string& b) {
 // --- ring-centroid stacking signature -------------------------------------
 // A candidate is "ring-stacked" when the vector between the two base RING
 // centroids is offset more ALONG the mean base normal (vertical) than in the
-// base plane (lateral) — i.e. one base sits over the other. Unlike the
+// base plane (lateral) - i.e. one base sits over the other. Unlike the
 // dNN-based is_stacking_signature, this is class-independent and works for the
 // sugar-edge classes (cWS/cSS/tWS) where real pairs have low dNN by design.
 // Threshold from the /tmp prototype: cuts ~5.4% of DSSR-absent "novel" pairs
@@ -174,7 +174,7 @@ std::vector<PairCandidate> find_candidates(
     // Replaces the O(n^2) all-pairs scan: bin node origins into cells of side
     // max_distance, so all neighbors within max_distance lie in the 27 cells
     // around a node. For each i we gather j>i in those cells, sort ascending,
-    // and emit in (i asc, j asc) order — byte-identical candidate list to the
+    // and emit in (i asc, j asc) order - byte-identical candidate list to the
     // serial loop.
     const int n = static_cast<int>(nodes.size());
     const double cell = max_distance > 0 ? max_distance : 1.0;

@@ -1,6 +1,6 @@
 /**
  * @file richardson.cpp
- * @brief Richardson suite classifier (port of richardson.py).
+ * @brief Richardson suite classifier.
  */
 #include <pairfinder/scoring/richardson.hpp>
 
@@ -135,7 +135,7 @@ RichardsonClassifier::RichardsonClassifier(const std::filesystem::path& path)
     impl_->satellite = d["widths"].contains("satellite") ? to_widths(d["widths"]["satellite"])
                                                          : impl_->normal;
     if (d.contains("satellite_overrides")) {
-        // NB: iterate the lvalue, not a temporary — .items() on a temporary json
+        // NB: iterate the lvalue, not a temporary - .items() on a temporary json
         // dangles and silently yields nothing.
         const nlohmann::json& overrides = d["satellite_overrides"];
         for (const auto& [name, ov] : overrides.items()) {

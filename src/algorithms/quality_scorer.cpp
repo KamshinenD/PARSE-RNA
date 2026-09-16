@@ -1,6 +1,6 @@
 /**
  * @file quality_scorer.cpp
- * @brief Composite 0-1 quality score for selection ranking (port of quality_scorer.py).
+ * @brief Composite 0-1 quality score for selection ranking.
  */
 #include <pairfinder/algorithms/quality_scorer.hpp>
 

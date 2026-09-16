@@ -2,9 +2,9 @@
  * @file rigid_body.hpp
  * @brief Tsukuba / 3DNA rigid-body base-pair parameters (CLI output block).
  *
- * Faithful port of Python `validation/rigid_body.py compute_rigid_body_parameters`.
+ * Computes `compute_rigid_body_parameters`.
  * NOTE: this is a DIFFERENT decomposition from the scorer's
- * `scoring::compute_pair_parameters` (scorer_parameters/parameters.py) — that one
+ * `scoring::compute_pair_parameters` - that one
  * uses the hinge/half-angle convention; this one flips frame2 by diag(1,-1,-1),
  * halves the relative rotation, and expresses everything in the mid-frame
  * (Lu & Olson 2003 / 3DNA CEHS). They are not interchangeable.
@@ -17,7 +17,7 @@
 namespace pairfinder::algorithms {
 
 /// The six Tsukuba/3DNA base-pair parameters (translations in Angstroms,
-/// rotations in degrees), in the order emitted by the Python CLI.
+/// rotations in degrees), in CLI emission order.
 struct RigidBodyParameters {
     double shear = 0.0;
     double stretch = 0.0;

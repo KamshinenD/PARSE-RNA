@@ -1,7 +1,7 @@
 /**
  * @file carbonyl_margin.hpp
  * @brief Carbonyl-margin Watson/Sugar correction for pyrimidine O2
- *        (port of classification/carbonyl_margin.py).
+ *.
  *
  * A pyrimidine's O2 is shared between its Watson and Sugar edges; which edge is
  * engaged is decided by the DIRECTION the partner's H-bond enters O2 (toward N3 =

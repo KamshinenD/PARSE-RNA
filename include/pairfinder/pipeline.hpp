@@ -3,8 +3,8 @@
  * @brief End-to-end find + classify + select orchestration as a reusable object.
  *
  * Bundles the resource objects (templates, typing, H-bond chemistry, template
- * aligner, H-bond patterns, quality scorer) that the pipeline needs — loaded
- * once at construction — and exposes the stages so callers don't have to re-wire
+ * aligner, H-bond patterns, quality scorer) that the pipeline needs - loaded
+ * once at construction - and exposes the stages so callers don't have to re-wire
  * the 15-step incantation by hand. Mirrors exactly what the CLI used to inline:
  *
  *   PreparedStructure prep = pipeline.prepare(path);   // parse + frames + view

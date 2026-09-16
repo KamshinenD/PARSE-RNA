@@ -1,6 +1,6 @@
 /**
  * @file hbond.hpp
- * @brief Hydrogen-bond value type (port of hbond/hbond.py HBond).
+ * @brief Hydrogen-bond value type.
  */
 #ifndef PAIRFINDER_ALGORITHMS_HBOND_HBOND_HPP
 #define PAIRFINDER_ALGORITHMS_HBOND_HBOND_HPP

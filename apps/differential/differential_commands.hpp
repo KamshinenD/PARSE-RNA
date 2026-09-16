@@ -1,8 +1,8 @@
 /**
  * @file differential_commands.hpp
- * @brief Hidden `dump-*` subcommands used by the Python differential tests.
+ * @brief Hidden `dump-*` subcommands used by the differential tests.
  *
- * Each emits a sorted TSV of one pipeline stage's output so a diff_*.py oracle
+ * Each emits a sorted TSV of one pipeline stage's output so an external oracle
  * can compare it byte-for-byte against the reference implementation. They are not
  * part of the user-facing CLI; they live apart from main.cpp to keep the entry
  * point focused on the production find/classify/score path.

@@ -1,12 +1,11 @@
 /**
  * @file scorer.hpp
- * @brief Empirical 0-100 base-pair quality scorer (port of scoring/scorer.py +
- *        issues.py + features.py + canonical.py). Pair scoring (Step 8a):
+ * @brief Empirical 0-100 base-pair quality scorer. Pair scoring (Step 8a):
  *        score = 100 - sum(pair_weight[issue] * severity) over the 6 issues,
  *        severities driven by ProSco density tables + graded H-bond count.
  *
  * Loads reference data (parameter_distributions.json + prosco_distributions.json
- * + penalty_weights.json) — Python generates them; the C++ only consumes them.
+ * + penalty_weights.json), which the engine consumes but does not generate.
  */
 #ifndef PAIRFINDER_SCORING_SCORER_HPP
 #define PAIRFINDER_SCORING_SCORER_HPP
@@ -30,24 +29,24 @@ namespace pairfinder::scoring {
 namespace classification = pairfinder::algorithms::classification;
 namespace hbond = pairfinder::algorithms::hbond;
 
-/// One triggered issue and its weighted penalty contribution (weight × severity).
-/// The Černý three-tier provenance (ProSco / Z' / tier) is carried for reporting
+/// One triggered issue and its weighted penalty contribution (weight x severity).
+/// The Cerny three-tier provenance (ProSco / Z' / tier) is carried for reporting
 /// and downstream highlighting (e.g. PyMOL); it does not affect the score.
 struct IssuePenalty {
     std::string issue;
-    double weight = 0.0;            ///< pair_weight[issue] × severity
-    double severity = 0.0;          ///< Černý severity in [0,1]
+    double weight = 0.0;            ///< pair_weight[issue] x severity
+    double severity = 0.0;          ///< Cerny severity in [0,1]
     std::optional<double> prosco;   ///< ProSco of the worst contributing value (none if N/A)
     std::optional<double> zprime;   ///< Z' of the worst contributing value (none if N/A)
     std::string tier;               ///< "Preferred"/"Allowed"/"Of Concern"; "" if not ProSco-scored
 };
 
-/// Pair-score triage tiers — global, data-derived cutoffs (mirror of
-/// scoring/result.py::pair_tier). Acceptable spans [80, 100); below is Review.
+/// Pair-score triage tiers - global, data-derived cutoffs (mirror of
+/// Acceptable spans [80, 100); below is Review.
 constexpr double kTierAcceptableMin = 80.0;
 
 /// Triage tier for a pair score:
-///   "Preferred"  = 100     (every scored parameter in its Preferred/ProSco≥5 region)
+///   "Preferred"  = 100     (every scored parameter in its Preferred/ProSco>=5 region)
 ///   "Acceptable" = [80,100) (minor strain, no review needed)
 ///   "Review"     = <80      (worth a manual look)
 /// Global rather than per-LW-class: all 12 LW medians are 100 and per-(class,bp)
@@ -58,10 +57,10 @@ inline std::string pair_tier(double score) {
     return "Review";
 }
 
-/// Report-only "unusual sugar pucker": a C2'-endo (by δ) sugar in a helical cWW
+/// Report-only "unusual sugar pucker": a C2'-endo (by delta) sugar in a helical cWW
 /// G-C/A-U pair, where A-form helices are C3'-endo. `pperp_confirms` = the Pperp
 /// geometry also reads C2'-endo (genuine, atypical-but-real) vs C3'-endo (ring
-/// likely mis-modeled → really a pucker OUTLIER). Does NOT affect the score.
+/// likely mis-modeled -> really a pucker OUTLIER). Does NOT affect the score.
 struct UnusualPucker {
     std::string res_id;
     std::optional<double> delta;
@@ -69,7 +68,7 @@ struct UnusualPucker {
     bool pperp_confirms = false;
 };
 
-/// Report-only sugar-pucker OUTLIER: the δ-derived pucker disagrees with the
+/// Report-only sugar-pucker OUTLIER: the delta-derived pucker disagrees with the
 /// Pperp-derived pucker (a mis-modeled ribose ring). Does NOT affect the score.
 struct PuckerOutlier {
     double pperp = 0.0;
@@ -86,11 +85,9 @@ struct PairScore {
     double penalty = 0.0;
     std::vector<IssuePenalty> issues;  ///< triggered issues, sorted by descending penalty
     std::vector<UnusualPucker> unusual_pucker;  ///< report-only (helical C2'-endo)
-    /// Worst SCORED heavy-atom overlap between the two residues (A), signed:
-    /// negative when cleanly separated. This is the RAW feature behind the
-    /// `clash` severity, emitted so downstream weight fitting can recompute
-    /// severity itself; it is NOT thresholded (see clashes.hpp). nullopt when
-    /// either residue has no heavy atoms.
+    /// Worst scored heavy-atom overlap (A), signed; negative when separated.
+    /// Raw and ungated - the feature behind the `clash` severity, so weight
+    /// fitting can recompute it. nullopt if a residue has no heavy atoms.
     std::optional<double> clash_overlap;
 
     /// Triage tier derived from `score` (Preferred/Acceptable/Review).
@@ -99,18 +96,19 @@ struct PairScore {
 
 /// One suite torsion flagged as genuinely off its target conformer. Reported
 /// only when it *fires*: ProSco below the Preferred cutoff (5) against the
-/// empirical per-conformer distribution. No Z'/penalty — suiteness is the score.
+/// empirical per-conformer distribution. No Z'/penalty - suiteness is the score.
 struct AngleDeviation {
-    std::string angle;              ///< suite dihedral name (alpha .. delta_prev)
+    std::string angle;              ///< suite dihedral name (alpha . delta_prev)
     double value = 0.0;             ///< measured angle, degrees
-    double target = 0.0;            ///< conformer-center angle, degrees
-    double gap = 0.0;               ///< signed measured − target, degrees
+    double target = 0.0;            ///< recommended angle, degrees (damped)
+    double gap = 0.0;               ///< signed measured - conformer centre, degrees
     std::optional<double> prosco;   ///< density percentile (lower = more anomalous)
+    std::optional<double> conformer_center;  ///< the undamped cluster centre
 };
 
-/// Refinement-facing backbone recommendation for one residue (mirror of Python
-/// BackboneRecommendation). tier: "fixable" (≥1 firing torsion, correct these) /
-/// "review" (low suiteness but no firing torsion — jointly distorted, rebuild) /
+/// Refinement-facing backbone recommendation for one residue (see
+/// BackboneRecommendation). tier: "fixable" (>=1 firing torsion, correct these) /
+/// "review" (low suiteness but no firing torsion - jointly distorted, rebuild) /
 /// "flag_only" (outlier, nearest conformer is only a hint).
 struct BackboneRecommendation {
     std::string tier;
@@ -124,13 +122,12 @@ struct ResidueScore {
     double suiteness = 0.0;
     double score = 0.0;
     std::optional<BackboneRecommendation> recommendation;  ///< none for ok residues
-    std::optional<double> delta;    ///< δ torsion (ring-based pucker signal)
-    std::optional<double> pperp;    ///< base-phosphate perpendicular distance (Å)
-    std::optional<PuckerOutlier> pucker_outlier;  ///< set only when δ/Pperp disagree
+    std::optional<double> delta;    ///< delta torsion (ring-based pucker signal)
+    std::optional<double> pperp;    ///< base-phosphate perpendicular distance (A)
+    std::optional<PuckerOutlier> pucker_outlier;  ///< set only when delta/Pperp disagree
 };
 
-/// Full per-residue backbone torsion row (mirror of extract_backbone_torsions.py
-/// torsions_all.csv): every residue with a valid 7D suite, including outliers,
+/// Full per-residue backbone torsion row: every residue with a valid 7D suite, including outliers,
 /// captured before the RNA-only / L-RNA scoring filters. Populated only when
 /// score_structure is called with collect_backbone=true.
 struct BackboneTorsion {
@@ -145,7 +142,7 @@ struct BackboneTorsion {
 
 /// Per-axis structure scores. `pairs_score` and `residues_score` are reported
 /// separately: they are on different scales and measure different quality axes.
-/// There is deliberately no combined "overall" — such a label overclaims
+/// There is deliberately no combined "overall" - such a label overclaims
 /// whole-structure quality (clashscore, bond geometry, etc. are not considered).
 struct StructureScore {
     double pairs_score = 0.0;
@@ -154,13 +151,13 @@ struct StructureScore {
     std::vector<PairScore> pair_scores;
     std::vector<ResidueScore> residue_scores;
     std::vector<BackboneTorsion> backbone_torsions;  ///< populated only when collect_backbone
-    /// Every RNA-RNA steric clash in the structure, worst first — including
+    /// Every RNA-RNA steric clash in the structure, worst first - including
     /// clashes between residues that are not a base pair. Report-only at the
     /// structure level; the per-pair `clash` parameter is what affects scores.
     /// Protein contacts are deliberately excluded (see clashes.hpp).
     std::vector<ClashContact> clashes;
 
-    /// Count of scored pairs per triage tier (mirror of Python tier_summary()).
+    /// Count of scored pairs per triage tier.
     struct TierSummary { int preferred = 0, acceptable = 0, review = 0; };
     TierSummary tier_summary() const {
         TierSummary t;

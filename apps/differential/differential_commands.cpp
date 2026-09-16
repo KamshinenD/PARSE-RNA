@@ -55,7 +55,7 @@ std::string format_issues(const pairfinder::scoring::PairScore& ps) {
 
 }  // namespace
 
-// Emit "<res_id>\t<rms>\tR00..R22\ttx\tty\ttz" for diffing frames vs ls_fitting.
+// Emit "<res_id>\t<rms>\tR00.R22\ttx\tty\ttz" for diffing frames vs ls_fitting.
 int dump_frames(const std::string& path) {
     const auto structure = pairfinder::io::parse_pdb(path);
     const pairfinder::core::NucleotideRegistry registry(nucleotides_config());
@@ -123,7 +123,7 @@ int classify_suite(const std::vector<std::string>& angles) {
     return 0;
 }
 
-// Debug: emit "<res_id>\t<alpha>..<zeta>" (suite torsions) for diffing.
+// Debug: emit "<res_id>\t<alpha>.<zeta>" (suite torsions) for diffing.
 int dump_torsions(const std::string& path) {
     using namespace pairfinder;
     auto structure = io::parse_pdb(path);
@@ -191,9 +191,9 @@ int dump_structure(const std::string& path) {
 }
 
 // Per-residue sugar pucker: emit "<res_id>\t<delta>\t<pperp>\t<helical>" for every
-// scored residue that has both — the full-set δ-vs-Pperp distribution, at C++ speed.
+// scored residue that has both - the full-set delta-vs-Pperp distribution, at C++ speed.
 // `helical` = 1 if the residue sits in a HELICAL cWW G-C/A-U pair (the sugar-pucker
-// check's context; A-form → C3'-endo), else 0. (residue_scores are already RNA-only.)
+// check's context; A-form -> C3'-endo), else 0. (residue_scores are already RNA-only.)
 int dump_pucker(const std::string& path) {
     using namespace pairfinder;
     Pipeline pipeline(cli_pipeline_config());
@@ -208,7 +208,7 @@ int dump_pucker(const std::string& path) {
     algorithms::hbond::HBondFinder finder(chem);
     const auto ss = scorer.score_structure(selected, structure, finder, chem, typing);
 
-    // Residues in a helical cWW canonical (G-C/A-U) pair — the pucker check's context.
+    // Residues in a helical cWW canonical (G-C/A-U) pair - the pucker check's context.
     static const std::unordered_set<std::string> kWc = {"G-C", "C-G", "A-U", "U-A"};
     const auto chains = algorithms::RNAChains::from_structure(structure);
     const auto in_helix = algorithms::selection::helix_membership(selected, chains);
@@ -410,7 +410,7 @@ int dump_lwclass(const std::string& path) {
     const auto frames = algorithms::calculate_all_frames(structure, pipeline.templates());
     const auto cands = algorithms::find_candidates(structure, frames, typing);
 
-    // Switch residues to pipeline base types (PairCache: DC->C, DT->T) — frames
+    // Switch residues to pipeline base types (PairCache: DC->C, DT->T) - frames
     // were already computed from the original names.
     for (auto& chain : structure.chains())
         for (auto& res : chain.residues()) core::apply_pipeline_view(res);
@@ -448,7 +448,7 @@ int dump_lwclass(const std::string& path) {
 }
 
 // Emit each pair candidate (within 15A) as a sorted TSV row for diffing against
-// the Python PairCache: "<res_i>\t<res_j>\t dorg d_v plane dNN dx dy dz qscore valid".
+// the candidate cache: "<res_i>\t<res_j>\t dorg d_v plane dNN dx dy dz qscore valid".
 int dump_candidates(const std::string& path) {
     using namespace pairfinder;
     const auto structure = io::parse_pdb(path);
@@ -481,7 +481,7 @@ int dump_candidates(const std::string& path) {
 
 // Run find_between on every residue pair (legacy order) and emit each H-bond as
 // "<res_i>\t<res_j>\t<donor_res>\t<donor_atom>\t<acc_res>\t<acc_atom>\t<dist>\t
-//  <h_idx>\t<lp_idx>\t<align>" — sorted — for diffing against the Python finder.
+//  <h_idx>\t<lp_idx>\t<align>" - sorted - for diffing against a reference finder.
 int dump_hbonds(const std::string& path) {
     using namespace pairfinder;
     const auto structure = io::parse_pdb(path);
@@ -492,7 +492,7 @@ int dump_hbonds(const std::string& path) {
     for (const auto& chain : structure.chains())
         for (const auto& res : chain.residues()) residues.push_back(&res);
     // Canonical order (sorted res_id) so find_between's argument order matches
-    // the Python differential oracle exactly (selection can depend on it).
+    // the differential oracle exactly (selection can depend on it).
     std::sort(residues.begin(), residues.end(),
               [](const core::Residue* a, const core::Residue* b) {
                   return a->res_id() < b->res_id();
@@ -523,7 +523,7 @@ int dump_hbonds(const std::string& path) {
     return 0;
 }
 
-// Emit "<res_id>\t<atom>\t%.3f\t%.3f\t%.3f", sorted, for diffing against Python.
+// Emit "<res_id>\t<atom>\t%.3f\t%.3f\t%.3f", sorted, for diffing.
 int dump_parse(const std::string& path) {
     const auto structure = pairfinder::io::parse_pdb(path);
     std::vector<std::string> rows;

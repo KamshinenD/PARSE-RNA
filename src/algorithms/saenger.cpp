@@ -20,7 +20,7 @@ struct SaengerType {
     const char* lw_class;
 };
 
-// The 28 Saenger types (saenger.py SAENGER_TYPES), order preserved.
+// The 28 Saenger types, order preserved.
 const std::vector<SaengerType>& saenger_types() {
     static const std::vector<SaengerType> t = {
         {"A", "A", {{"N6", "N1"}, {"N1", "N6"}}, "tWW"},

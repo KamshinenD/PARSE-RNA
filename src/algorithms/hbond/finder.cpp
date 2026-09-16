@@ -1,6 +1,6 @@
 /**
  * @file finder.cpp
- * @brief Slot-based H-bond finder (faithful port of hbond/finder.py).
+ * @brief Slot-based H-bond finder.
  */
 #include <pairfinder/algorithms/hbond/finder.hpp>
 
@@ -46,7 +46,7 @@ bool split_res_id(const std::string& res_id, std::string& chain, long& num) {
     return true;
 }
 
-// Peptide-bond geometry (consecutive protein N...O) — not a real H-bond.
+// Peptide-bond geometry (consecutive protein N...O) - not a real H-bond.
 bool is_consecutive_backbone_bond(const HBondCandidate& c, const ResMap& residues) {
     if (c.donor_atom != "N" || c.acceptor_atom != "O") return false;
     const auto d_it = residues.find(c.donor_res_id);

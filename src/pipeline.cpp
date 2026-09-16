@@ -39,7 +39,7 @@ PreparedStructure Pipeline::prepare(const std::string& path) const {
     prep.structure = io::parse_pdb(path);
     prep.frames = algorithms::calculate_all_frames(prep.structure, lib_);
     // Switch residues to pipeline base types (DC->C, DT->T) AFTER frames were
-    // computed from the original names — matches the inlined CLI ordering.
+    // computed from the original names - matches the inlined CLI ordering.
     for (auto& chain : prep.structure.chains())
         for (auto& res : chain.residues()) core::apply_pipeline_view(res);
     return prep;

@@ -1,6 +1,6 @@
 /**
  * @file hbond_patterns.cpp
- * @brief Expected LW H-bond patterns + matching (port of patterns.py + template_patterns.py).
+ * @brief Expected LW H-bond patterns + matching.
  */
 #include <pairfinder/algorithms/hbond_patterns.hpp>
 
@@ -31,7 +31,7 @@ std::string upper(std::string s) {
     return s;
 }
 
-// patterns.py _normalize_sequence
+// Normalize a pair sequence to the key used by the curated pattern table.
 std::string normalize_sequence(const std::string& sequence, const core::BaseTyping& typing) {
     const std::string seq = upper(sequence);
     if (seq.size() == 2 && is_standard_base(std::string(1, seq[0])) &&
@@ -45,7 +45,7 @@ std::string normalize_sequence(const std::string& sequence, const core::BaseTypi
     return seq;
 }
 
-// Curated HBOND_PATTERNS (patterns.py). lw -> seq -> list of (donor, acceptor).
+// Curated HBOND_PATTERNS. lw -> seq -> list of (donor, acceptor).
 const std::unordered_map<std::string, std::unordered_map<std::string, std::vector<HBondPattern>>>&
 curated_patterns() {
     static const std::unordered_map<std::string,

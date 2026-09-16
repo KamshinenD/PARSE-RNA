@@ -1,6 +1,6 @@
 /**
  * @file torsions.hpp
- * @brief Backbone torsion angles (port of scorer_parameters/torsions.py).
+ * @brief Backbone torsion angles.
  *
  * Computes the six suite backbone torsions (alpha, beta, gamma, delta, epsilon,
  * zeta) per residue, sequence-ordered (chain, seq) with adjacent prev/next.
@@ -32,8 +32,8 @@ struct ResSeq {
 /// Handles negative sequence numbers ("G-C--8" -> {"G", -8, ""}) and
 /// insertion / alt-conf codes ("A-G-20A" -> {"A", 20, "A"}) by taking the
 /// full sequence field (everything after the second '-') and splitting a
-/// signed integer prefix from trailing letters. Mirrors the Python
-/// identifiers.parse_res_seq. Returns nullopt if there is no integer seq.
+/// signed integer prefix from trailing letters. Returns nullopt if there is
+/// no integer seq.
 std::optional<ResSeq> parse_res_seq(const std::string& res_id);
 
 /// res_id -> torsions, for every residue (sequence-ordered prev/next neighbors).

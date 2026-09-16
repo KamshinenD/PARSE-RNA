@@ -1,6 +1,6 @@
 /**
  * @file clashes.cpp
- * @brief Heavy-atom steric clash detection (mirror of scoring/clashes.py).
+ * @brief Heavy-atom steric clash detection.
  */
 #include <pairfinder/scoring/clashes.hpp>
 
@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <string_view>
 #include <unordered_set>
 
@@ -43,6 +44,8 @@ char element_of(std::string_view atom_name) {
     return c;
 }
 
+bool is_polar(char element) { return element == 'N' || element == 'O' || element == 'S'; }
+
 double radius_of(char element) {
     switch (element) {
         case 'C': return kRadiusC;
@@ -53,8 +56,6 @@ double radius_of(char element) {
         default:  return kRadiusDefault;
     }
 }
-
-bool is_polar(char element) { return element == 'N' || element == 'O' || element == 'S'; }
 
 /// Phosphate-group atom names. Sugar atoms are identified by their prime, so
 /// these are the only non-base atoms that need naming.
@@ -67,28 +68,59 @@ bool is_phosphate_name(std::string_view n) {
 struct HeavyAtom {
     geometry::Vector3d pos;
     double radius;
-    bool polar;
+    bool donor;                ///< can donate an H-bond (HBondChemistry)
+    bool acceptor;             ///< can accept an H-bond
+    bool polar;                ///< N / O / S
     bool base;                 ///< base atom (not sugar / phosphate)
     const std::string* name;
 };
 
-void collect_heavy(const core::Residue& residue, std::vector<HeavyAtom>& out) {
+/// Donor / acceptor capacity for one atom, resolved once at collection time.
+/// Keyed on the residue's base type, exactly as HBondFinder does it.
+std::pair<bool, bool> hbond_capacity(const algorithms::hbond::HBondChemistry& chem,
+                                     const std::string& base_type, const std::string& atom) {
+    const auto d = chem.donor_capacity(base_type, atom);
+    const auto a = chem.acceptor_capacity(base_type, atom);
+    return {d.has_value() && *d > 0, a.has_value() && *a > 0};
+}
+
+void collect_heavy(const core::Residue& residue, std::vector<HeavyAtom>& out,
+                   const algorithms::hbond::HBondChemistry& chem) {
     out.clear();
     out.reserve(residue.atoms().size());
+    const std::string& base_type = residue.base_type();
     for (const auto& atom : residue.atoms()) {
         const char e = element_of(atom.name);
         if (e == '\0') continue;
-        out.push_back(HeavyAtom{atom.coords, radius_of(e), is_polar(e),
+        const auto [don, acc] = hbond_capacity(chem, base_type, atom.name);
+        out.push_back(HeavyAtom{atom.coords, radius_of(e), don, acc, is_polar(e),
                                 is_base_atom(atom.name), &atom.name});
     }
 }
 
+/// The H-bond floor applies only when the pair could actually hydrogen-bond --
+/// one side donating, the other accepting. Two acceptors (two carbonyls, say)
+/// have no tautomer that bonds, so they are held to the full van der Waals sum
+/// and a close approach registers as the clash it is.
+///
+/// An atom absent from the capacity tables (the phosphodiester O3' / O5', which
+/// HBondChemistry does not list either way) is treated as UNKNOWN, not as
+/// incapable: 2'-OH...O5' is a real H-bond, and charging it the van der Waals
+/// sum would turn a gap in the H-bond tables into a false clash. Two polar atoms
+/// keep the lenient floor whenever either side's chemistry is unknown.
+bool hbond_plausible(const HeavyAtom& a, const HeavyAtom& b) {
+    if ((a.donor && b.acceptor) || (a.acceptor && b.donor)) return true;
+    const bool a_unknown = !a.donor && !a.acceptor;
+    const bool b_unknown = !b.donor && !b.acceptor;
+    return (a_unknown || b_unknown) && a.polar && b.polar;
+}
+
 double min_acceptable(const HeavyAtom& a, const HeavyAtom& b) {
-    return (a.polar && b.polar) ? kHBondFloor : (a.radius + b.radius);
+    return hbond_plausible(a, b) ? kHBondFloorMinOk : (a.radius + b.radius);
 }
 
 /// True when the two residues are joined by an O3'(i)-P(j) phosphodiester bond
-/// (either direction). Two O(1) lookups — the fast path for the vast majority
+/// (either direction). Two O(1) lookups - the fast path for the vast majority
 /// of pairs, which are not covalently linked.
 bool covalently_linked(const core::Residue& r1, const core::Residue& r2) {
     const auto bonded = [](const core::Atom* o3, const core::Atom* p) {
@@ -176,10 +208,18 @@ BestContact worst_contact(const std::vector<HeavyAtom>& a, const std::vector<Hea
             const double dy = ai.pos.y - bj.pos.y;
             const double dz = ai.pos.z - bj.pos.z;
             const double d2 = dx * dx + dy * dy + dz * dz;
-            // Nothing beyond the largest possible min_ok can overlap. Once a
-            // candidate exists, reject the overwhelming majority of remaining
-            // pairs on squared distance alone — no sqrt, no set lookup.
-            if (best.valid && d2 >= kMaxMinOkSq) continue;
+            // A pair can only beat the incumbent if it is closer than
+            // (min_ok - best.overlap); reject on squared distance alone, so the
+            // overwhelming majority cost no sqrt and no set lookup. The bound is
+            // infinite until a candidate exists, so EVERY pair is still eligible
+            // to set the first best -- otherwise a residue pair whose closest
+            // base contact lies beyond kMaxMinOk would return whichever pair
+            // happened to be examined first rather than the true maximum.
+            const double bound =
+                best.valid ? min_acceptable(ai, bj) - best.overlap
+                           : std::numeric_limits<double>::infinity();
+            if (bound <= 0.0) continue;
+            if (std::isfinite(bound) && d2 >= bound * bound) continue;
             if (excluded != nullptr && excluded->count(name_key(*ai.name, *bj.name)) != 0) {
                 continue;
             }
@@ -199,7 +239,7 @@ BestContact worst_contact(const std::vector<HeavyAtom>& a, const std::vector<Hea
 /// Zero at (and below) the clash threshold, rising to 1 at the cap. Rebasing on
 /// the threshold means a contact that has only just become a clash costs almost
 /// nothing, instead of the ~0.8 severity the un-rebased `overlap / cap` charged.
-/// Mirrors clash_severity() in scoring/clashes.py.
+/// Linear ramp from kClashThreshold to kClashSeverityCap.
 double clash_severity(double overlap) {
     if (std::isnan(overlap)) return 0.0;
     constexpr double kSpan = kClashSeverityCap - kClashThreshold;
@@ -231,10 +271,11 @@ bool is_base_atom(std::string_view atom_name) {
     return atom_name.find('\'') == std::string_view::npos && !is_phosphate_name(atom_name);
 }
 
-std::optional<double> worst_overlap(const core::Residue& res1, const core::Residue& res2) {
+std::optional<double> worst_overlap(const core::Residue& res1, const core::Residue& res2,
+                                    const algorithms::hbond::HBondChemistry& chem) {
     std::vector<HeavyAtom> a, b;
-    collect_heavy(res1, a);
-    collect_heavy(res2, b);
+    collect_heavy(res1, a, chem);
+    collect_heavy(res2, b, chem);
     if (a.empty() || b.empty()) return std::nullopt;
 
     std::unordered_set<std::string> excluded;
@@ -247,10 +288,11 @@ std::optional<double> worst_overlap(const core::Residue& res1, const core::Resid
 }
 
 std::optional<ClashContact> pair_clash(const core::Residue& res1, const core::Residue& res2,
+                                       const algorithms::hbond::HBondChemistry& chem,
                                        double threshold) {
     std::vector<HeavyAtom> a, b;
-    collect_heavy(res1, a);
-    collect_heavy(res2, b);
+    collect_heavy(res1, a, chem);
+    collect_heavy(res2, b, chem);
     if (a.empty() || b.empty()) return std::nullopt;
 
     std::unordered_set<std::string> excluded;
@@ -273,10 +315,11 @@ std::optional<ClashContact> pair_clash(const core::Residue& res1, const core::Re
 
 std::optional<ClashContact> pair_backbone_clash(const core::Residue& res1,
                                                 const core::Residue& res2,
+                                                const algorithms::hbond::HBondChemistry& chem,
                                                 double threshold) {
     std::vector<HeavyAtom> a, b;
-    collect_heavy(res1, a);
-    collect_heavy(res2, b);
+    collect_heavy(res1, a, chem);
+    collect_heavy(res2, b, chem);
     if (a.empty() || b.empty()) return std::nullopt;
 
     std::unordered_set<std::string> excluded;
@@ -310,6 +353,8 @@ namespace {
 struct GridAtom {
     geometry::Vector3d pos;
     double radius;
+    bool donor;
+    bool acceptor;
     bool polar;
     const std::string* name;
     const std::string* res_id;
@@ -333,7 +378,8 @@ struct CellHash {
 
 std::vector<ClashContact> structure_clashes(
     const std::unordered_map<std::string, core::Residue>& residues,
-    const core::BaseTyping& typing, double threshold) {
+    const core::BaseTyping& typing, const algorithms::hbond::HBondChemistry& chem,
+    double threshold) {
     // Flatten every RNA heavy atom into one contiguous array.
     std::vector<GridAtom> atoms;
     std::vector<const core::Residue*> residue_ptrs;
@@ -345,8 +391,9 @@ std::vector<ClashContact> structure_clashes(
         for (const auto& atom : residue.atoms()) {
             const char e = element_of(atom.name);
             if (e == '\0') continue;
-            atoms.push_back(GridAtom{atom.coords, radius_of(e), is_polar(e), &atom.name,
-                                     &residue.res_id(), idx});
+            const auto [don, acc] = hbond_capacity(chem, residue.base_type(), atom.name);
+            atoms.push_back(GridAtom{atom.coords, radius_of(e), don, acc, is_polar(e),
+                                     &atom.name, &residue.res_id(), idx});
         }
     }
     if (atoms.size() < 2) return {};
@@ -387,8 +434,13 @@ std::vector<ClashContact> structure_clashes(
                         const double ddz = ai.pos.z - aj.pos.z;
                         const double d2 = ddx * ddx + ddy * ddy + ddz * ddz;
                         if (d2 >= kMaxMinOkSq) continue;
+                        const bool ai_unknown = !ai.donor && !ai.acceptor;
+                        const bool aj_unknown = !aj.donor && !aj.acceptor;
+                        const bool can_hb =
+                            ((ai.donor && aj.acceptor) || (ai.acceptor && aj.donor)) ||
+                            ((ai_unknown || aj_unknown) && ai.polar && aj.polar);
                         const double min_ok =
-                            (ai.polar && aj.polar) ? kHBondFloor : (ai.radius + aj.radius);
+                            can_hb ? kHBondFloorMinOk : (ai.radius + aj.radius);
                         const double d = std::sqrt(d2);
                         const double overlap = min_ok - d;
                         if (overlap <= threshold) continue;
@@ -406,8 +458,8 @@ std::vector<ClashContact> structure_clashes(
                                                                   *residue_ptrs[hi_res]);
                             lit = linked_cache.emplace(rk, linked).first;
                             if (linked) {
-                                collect_heavy(*residue_ptrs[lo_res], ha);
-                                collect_heavy(*residue_ptrs[hi_res], hb);
+                                collect_heavy(*residue_ptrs[lo_res], ha, chem);
+                                collect_heavy(*residue_ptrs[hi_res], hb, chem);
                                 link_cache[rk] = bonded_cross_pairs(ha, hb);
                             }
                         }

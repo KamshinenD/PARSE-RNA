@@ -1,8 +1,8 @@
 /**
  * @file superposition.cpp
- * @brief Least-squares rigid superposition — faithful port of x3dna's
- *        geometry::LeastSquaresFitter (find_pair_2), the canonical `ls_fitting`
- *        method that generated the reference ls_fitting frames.
+ * @brief Least-squares rigid superposition - faithful port of x3dna's
+ *        geometry::LeastSquaresFitter, the canonical `ls_fitting` method that
+ *        generated the reference ls_fitting frames.
  *
  * Method: covariance matrix -> 4x4 quaternion key matrix (Horn) -> largest
  * eigenvector via symmetric Jacobi -> rotation matrix -> translation -> RMS.

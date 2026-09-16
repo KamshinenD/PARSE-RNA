@@ -1,6 +1,6 @@
 /**
  * @file edge_classifier.cpp
- * @brief LW edge classification — faithful port of edge_classifier.py (aligner=None).
+ * @brief LW edge classification.
  */
 #include <pairfinder/algorithms/edge_classifier.hpp>
 
@@ -23,7 +23,7 @@ using core::ReferenceFrame;
 using geometry::Vector3d;
 using hbond::HBond;
 
-// ---- tuning constants (edge_classifier.py) ---------------------------------
+// ---- tuning constants ---------------------------------
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kN7GuardMargin = 0.2;
 constexpr double kVotingContactDistance = 4.0;
@@ -425,7 +425,7 @@ char resolve_ambiguous_face_by_partner(const Residue& amb, const std::vector<cha
     if (avg.size() < 2) return 0;
     char best = 0;
     double bestd = std::numeric_limits<double>::infinity();
-    // Match Python min(avg, key=avg.get): first key (dict order) on ties; iterate
+    // Ties resolve to the first key in insertion order; iterate
     // competing in its sorted order for determinism.
     for (char face : competing) {
         auto it = avg.find(face);
@@ -620,7 +620,7 @@ GeoResult classify_by_geometry(const ReferenceFrame& f1, const ReferenceFrame& f
     DetectResult d2 = detect_face_with_dots(f2, res2, partner2, typing);
     char face2 = confirm_face_by_atoms(res2, d2.face, f2, partner2, d2.dots, hbonds, typing);
 
-    // (aligner disagreement resolver skipped — production passes aligner=None)
+    // (aligner disagreement resolver skipped - production passes aligner=None)
 
     const bool have_hb = !hbonds.empty();
     if (have_hb) cross_check_faces(res1, face1, res2, face2, hbonds, typing);
@@ -708,7 +708,7 @@ GeoResult classify_by_geometry(const ReferenceFrame& f1, const ReferenceFrame& f
             // For a W/S boundary the swapped-flag mismatch is a canonical-sort
             // artifact and that path isn't reliably separable, so commit to the
             // geometric primary. A *pure W/H* boundary ambiguity (tWW vs tWH,
-            // cWW vs cHH) is a genuine class difference DSSR also leaves "." —
+            // cWW vs cHH) is a genuine class difference DSSR also leaves "."  -
             // keep it rather than silently committing.
             out.uncertain = false;
         } else {

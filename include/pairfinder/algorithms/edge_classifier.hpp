@@ -2,7 +2,7 @@
  * @file edge_classifier.hpp
  * @brief Leontis-Westhof edge classification (geometry + H-bond face voting).
  *
- * Faithful port of the Python classification/edge_classifier.py production path
+ * The production classification path
  * (classify_lw_class with aligner=None): cis/trans orientation, centroid face
  * detection, atom-confirmation, cross-check, H-bond face signal (+ boundary
  * ambiguity), close-contact refinement, and the pyrimidine W/S tiebreaker.
@@ -22,7 +22,7 @@
 namespace pairfinder::algorithms::classification {
 
 /// Canonical LW class (e.g. "cWW", "tHS", or ambiguous "cWH|cWW") plus a swap
-/// flag — when true the caller must swap res1/res2 (and parallel fields).
+/// flag - when true the caller must swap res1/res2 (and parallel fields).
 struct LwResult {
     std::string lw_class;
     bool swapped = false;

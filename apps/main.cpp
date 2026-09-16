@@ -4,9 +4,8 @@
  *
  * Production path: resolve the input (a 4-char PDB id fetched from RCSB, or a
  * local .cif/.pdb(.gz)), run the find + classify + score pipeline, and emit the
- * find_pairs.py-parity JSON. The hidden `dump-*` subcommands used by the Python
- * differential tests live in debug_commands.cpp; resource-path resolution lives
- * in cli_support.cpp.
+ * JSON report. The hidden `dump-*` subcommands used by the differential tests
+ * live in debug_commands.cpp; resource-path resolution lives in cli_support.cpp.
  */
 #include <array>
 #include <chrono>
@@ -43,7 +42,7 @@ namespace {
 constexpr const char* kVersion = "0.1.0";
 
 // Maps raw parameter keys to human-readable report group names.
-// Mirrors Python REPORT_GROUPS in pair_finder.scoring.issues.
+//.scoring.issues.
 const std::unordered_map<std::string, std::string> kReportGroup = {
     {"shear",                 "Pair In-Plane Displacement"},
     {"stretch",               "Pair In-Plane Displacement"},
@@ -57,7 +56,7 @@ const std::unordered_map<std::string, std::string> kReportGroup = {
     {"clash",                 "Steric Clash"},
 };
 
-// ---- Step 9: full `find` pipeline -> JSON (parity with cli/find_pairs.py) ----
+// ---- Step 9: full `find` pipeline -> JSON ----
 using json = nlohmann::json;
 
 double round_to(double v, int n) {
@@ -91,7 +90,7 @@ json frame_json(const pairfinder::core::ReferenceFrame& f) {
                 {"z_axis", vec3_json(f.z_axis())}};
 }
 
-// Run the full pipeline and emit the find_pairs.py JSON (default + --details).
+// Run the full pipeline and emit the report JSON (default + --details).
 int find_json(const std::string& path, bool score, bool details, bool emit_classified,
               const std::string& out_path) {
     using namespace pairfinder;
@@ -119,7 +118,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         if (sc.validation.is_valid) ++candidates_valid;
 
     // Optionally capture every valid classified candidate (pre-selection) so a
-    // downstream comparison can measure identification recall — whether a pair was
+    // downstream comparison can measure identification recall - whether a pair was
     // found + classified at all, independent of helix-priority selection.
     json classified = json::array();
     if (emit_classified) {
@@ -213,8 +212,8 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
 
             // Per-pair H-bond geometry: re-run the finder between the paired
             // residues and emit every bond (distance + donor/acceptor angle +
-            // slot alignment). Mirrors extract_pair_features.py so the feature
-            // CSVs can be regenerated from the engine.
+            // slot alignment), so the per-pair feature tables can be
+            // regenerated from the engine alone.
             if (scoring::Scorer::is_scorable(sc, pipeline.typing())) {
                 const auto r1 = res_by_id.find(sc.res_id1);
                 const auto r2 = res_by_id.find(sc.res_id2);
@@ -252,10 +251,9 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             if (it != score_by_key.end()) {
                 p["score"] = round_to(it->second->score, 2);
                 p["tier"] = it->second->tier();
-                // Issues as a list of key strings — mirrors Python's
-                // [ip.issue for ip in ps.issues] in finder.py.
+                // Issues as a flat list of key strings.
                 json iss = json::array();
-                // Per-issue Černý provenance (ProSco / Z' / tier) for downstream
+                // Per-issue Cerny provenance (ProSco / Z' / tier) for downstream
                 // highlighting; same order as "issues" (descending penalty).
                 json issue_rows = json::array();
                 for (const auto& ip : it->second->issues) {
@@ -269,9 +267,8 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                 }
                 p["issues"] = std::move(iss);
                 p["issue_details"] = std::move(issue_rows);
-                // Raw worst scored heavy-atom overlap (A), the feature behind
-                // the `clash` severity. Ungated and unsaturated, so downstream
-                // weight fitting can recompute severity from it.
+                // Raw overlap behind the `clash` severity: ungated and
+                // unsaturated, so weight fitting can recompute severity.
                 if (details) {
                     const auto& ov = it->second->clash_overlap;
                     p["clash_overlap"] = ov ? json(round_to(*ov, 4)) : json(nullptr);
@@ -307,11 +304,10 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         // backbone scores live on different scales / measure different axes, and
         // an "overall" label overclaims whole-structure quality (clashscore,
         // bond geometry, etc. are not considered). Reported separately below.
-        // null when no pair could be scored: that is "unmeasured", not
-        // "worst possible pairs". Selected-but-unscorable pairs (DNA,
-        // ambiguous) leave n_pairs > 0 with an empty pair_scores, and the
-        // mean of an empty list is 0.0 — reporting that pins the structure
-        // to the bottom of every correlation. Mirrors backbone_suiteness.
+        // null, not 0.0, when nothing was scored - unmeasured, not worst.
+        // Unscorable pairs (DNA, ambiguous) leave n_pairs > 0 with no scores,
+        // and an empty mean is 0.0, which would pin the structure to the
+        // bottom of every correlation. Mirrors backbone_suiteness.
         if (ss.pair_scores.empty())
             out["pairs_score"] = nullptr;
         else
@@ -325,8 +321,8 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             out["backbone_suiteness"] = nullptr;
         else
             out["backbone_suiteness"] = round_to(ss.residues_score / 100.0, 3);
-        // Pair triage tier counts (Preferred/Acceptable/Review) — mirror of
-        // Python StructureScore.tier_summary(). Always all three keys.
+        // Pair triage tier counts (Preferred/Acceptable/Review).
+        // Always all three keys, so consumers never have to test for absence.
         const auto ts = ss.tier_summary();
         const json tier_summary = json{
             {"Preferred", ts.preferred},
@@ -335,7 +331,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         out["tier_summary"] = tier_summary;
         // Whole-structure RNA-RNA steric clashes (report-only; includes
         // residues that are not a base pair). Protein contacts are excluded by
-        // design — see scoring/clashes.hpp.
+        // design - see scoring/clashes.hpp.
         json clashes = json::array();
         for (const auto& c : ss.clashes) {
             clashes.push_back(json{{"res_id1", c.res_id1}, {"atom1", c.atom1},
@@ -356,6 +352,8 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
                 json jd = {{"angle", d.angle}, {"value", round_to(d.value, 1)},
                            {"target", round_to(d.target, 1)}, {"gap", round_to(d.gap, 1)}};
                 if (d.prosco) jd["prosco"] = round_to(*d.prosco, 2);
+                if (d.conformer_center)
+                    jd["conformer_center"] = round_to(*d.conformer_center, 1);
                 devs.push_back(std::move(jd));
             }
             backbone_residues.push_back(json{
@@ -368,8 +366,8 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         out["backbone_residues"] = std::move(backbone_residues);
 
         // Full per-residue backbone torsions (--details only): one row per
-        // classifiable residue, mirroring extract_backbone_torsions.py so
-        // torsions_all.csv can be regenerated from the engine.
+        // classifiable residue, so the full torsion table can be regenerated
+        // from the engine alone.
         if (details) {
             auto ang = [](const std::optional<double>& v) {
                 return v ? json(round_to(*v, 4)) : json(nullptr);
@@ -388,7 +386,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
             }
             out["backbone_torsions"] = std::move(bt);
         }
-        // Report-only ribose pucker OUTLIERS (δ disagrees with Pperp), structure-level.
+        // Report-only ribose pucker OUTLIERS (delta disagrees with Pperp), structure-level.
         json pucker_outliers = json::array();
         for (const auto& rs : ss.residue_scores) {
             if (!rs.pucker_outlier) continue;
@@ -402,7 +400,7 @@ int find_json(const std::string& path, bool score, bool details, bool emit_class
         }
         if (!pucker_outliers.empty()) out["pucker_outliers"] = std::move(pucker_outliers);
         if (details) {
-            // Group by human-readable category names — mirrors Python issue_summary().
+            // Group by human-readable category names.
             json summary = json::object();
             for (const auto& ps : ss.pair_scores) {
                 for (const auto& ip : ps.issues) {
@@ -607,7 +605,7 @@ int main(int argc, char** argv) {
     }
 
     // Default: `parse <pdb-id | structure-file> [options]` runs the full
-    // pipeline and emits the find_pairs.py-parity JSON. A bare PDB id is fetched
+    // pipeline and emits the report JSON. A bare PDB id is fetched
     // from RCSB (cached) unless an existing file path is given.
     const std::string input = args[0];
     bool score = true, details = false, allow_download = true, emit_classified = false;

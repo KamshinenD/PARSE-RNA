@@ -1,6 +1,6 @@
 /**
  * @file confidence.hpp
- * @brief Intrinsic LW-class confidence (v3 two-term) — port of quality_intrinsic.py
+ * @brief Intrinsic LW-class confidence (v3 two-term)
  *        + finder._compute_classification_confidence.
  *
  *   confidence = sqrt(template_fit_score * edge_pattern_match_score)

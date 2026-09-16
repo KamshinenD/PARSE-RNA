@@ -1,6 +1,6 @@
 /**
  * @file selection.cpp
- * @brief Two-phase pair selection (port of finder/selection.py + helix.py).
+ * @brief Two-phase pair selection.
  */
 #include <pairfinder/algorithms/selection.hpp>
 
@@ -41,7 +41,7 @@ std::vector<std::string> split_pipe(const std::string& lw) {
     return out;
 }
 
-// ---- stacking-signature filter (validation/lw_class_filters.py) ----
+// ---- stacking-signature filter ----
 bool is_stacking_signature(const Cand& c) {
     static const std::unordered_map<std::string, std::pair<double, double>> thr = {
         {"cWW", {7.5, 1.5}}, {"cWH", {7.5, 1.5}}, {"cHH", {7.5, 1.5}}, {"tWW", {7.5, 1.5}},
@@ -51,7 +51,7 @@ bool is_stacking_signature(const Cand& c) {
     return c.validation.dNN < it->second.first && c.validation.d_v > it->second.second;
 }
 
-// ---- slot helpers (selection.py) ----
+// ---- slot helpers ----
 bool same_chain_adjacent(const std::string& a, const std::string& b) {
     auto split = [](const std::string& r, std::string& chain, long& num) {
         const auto p2 = r.rfind('-');
@@ -107,7 +107,7 @@ std::optional<SlotSet> resolve_for_selection(const Cand& c, const SlotSet& used)
     if (avail.empty()) return std::nullopt;
     if (avail.size() == 1) {
         // Only one branch's edges are free: claim them for exclusivity, but leave the
-        // class untouched — classification is the final word on it.
+        // class untouched - classification is the final word on it.
         return SlotSet{{r1, std::get<1>(avail[0])}, {r2, std::get<2>(avail[0])}};
     }
     SlotSet slots;
@@ -131,7 +131,7 @@ std::vector<std::pair<Slot, Slot>> possible_face_slots(const std::string& lw,
     return out;
 }
 
-// ---- HelixDetector (helix.py) ----
+// ---- HelixDetector ----
 // Kept as a faithful port reference (see the "kept as spec" note below); the
 // selection path uses the edge-set/components approach instead. [[maybe_unused]]
 // so it documents the spec without tripping -Wunused-function.
@@ -267,7 +267,7 @@ std::vector<Cand*> cww_helix_phase(const std::vector<Cand*>& cww, const RNAChain
             helix_idx.insert(idx);
         }
     }
-    // Phase 2: isolated pairs — extension-aware.
+    // Phase 2: isolated pairs - extension-aware.
     // potential extensions: helix ends -> candidate extensions.
     std::unordered_set<const Cand*> selected_set(selected.begin(), selected.end());
     std::vector<Cand*> extensions;  // flat list (we only need the union for overlap check)

@@ -2,7 +2,7 @@
  * @file chemistry.hpp
  * @brief Donor/acceptor capacities, base connectivity, and slot prediction.
  *
- * Faithful port of the Python ``hbond/geometry.py``: per-(base,atom) donor and
+ * Per-(base,atom) donor and
  * acceptor capacities + base connectivity (hardcoded for standard nucleotides /
  * amino acids, extended from ligand_hbond_db.json for modified residues), plus
  * the geometric prediction of hydrogen (donor) and lone-pair (acceptor) slot
@@ -34,7 +34,7 @@ Vector3d rotate_vector(const Vector3d& v, const Vector3d& axis, double angle_deg
 Vector3d compute_base_normal(const std::unordered_map<std::string, Vector3d>& atoms);
 
 /// A donor H slot or acceptor lone-pair slot. (bond_directions/max_bonds are
-/// retained for fidelity with the Python bifurcation model; the per-pair
+/// retained for fidelity with the bifurcation model; the per-pair
 /// selection path used by find_between does not mutate them.)
 struct HbSlot {
     Vector3d direction;
@@ -42,7 +42,7 @@ struct HbSlot {
     std::vector<Vector3d> bond_directions;
 };
 
-/// Atom-name -> coordinate view of a residue (raw PDB names, matching Python).
+/// Atom-name -> coordinate view of a residue (raw PDB names).
 using AtomMap = std::unordered_map<std::string, Vector3d>;
 
 /// Per-(base,atom) H-bond chemistry tables + slot prediction.
@@ -72,7 +72,7 @@ public:
                                          const AtomMap& atoms,
                                          const Vector3d& base_normal) const;
 
-    /// Bonded ring neighbors of (base, atom) — used for H-bond angle geometry.
+    /// Bonded ring neighbors of (base, atom) - used for H-bond angle geometry.
     const std::vector<std::string>& connectivity(const std::string& base,
                                                  const std::string& atom) const;
 

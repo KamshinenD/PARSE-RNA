@@ -155,8 +155,8 @@ ClassifiedPair classify_pair(const core::ReferenceFrame& frame1,
             aligner.compute_template_rmsd(*r1, *r2, classes[0], typing),
             aligner.compute_template_rmsd(*r1, *r2, classes[1], typing)};
         auto resolved = resolve_ambiguity(classes, rmsds, *r1, *r2, strict, typing);
-        // A pure W/H boundary ambiguity (no S edge) is genuinely undetermined —
-        // DSSR also marks these "." — so keep it rather than committing via
+        // A pure W/H boundary ambiguity (no S edge) is genuinely undetermined  -
+        // DSSR also marks these "." - so keep it rather than committing via
         // template/Saenger. The W/S path resolves as before.
         if (classes[0].find('S') == std::string::npos &&
             classes[1].find('S') == std::string::npos)
