@@ -1,6 +1,6 @@
 /**
  * @file rna_chains.cpp
- * @brief Spatial RNA chain connectivity (port of chains.py).
+ * @brief Spatial RNA chain connectivity.
  */
 #include <pairfinder/algorithms/rna_chains.hpp>
 
@@ -25,7 +25,7 @@ const Vector3d* coord(const Residue& r, const std::string& a) {
 
 // Uniform spatial hash on a single atom type (cell size = backbone cutoff).
 // query() returns residue indices whose indexed atom lies in the 27 cells
-// around a point — a superset that the caller distance-filters. Cuts the O(n^2)
+// around a point - a superset that the caller distance-filters. Cuts the O(n^2)
 // all-pairs O3'<->P scan to ~O(n) (the rna_chains ribosome bottleneck).
 struct AtomGrid {
     std::unordered_map<std::int64_t, std::vector<int>> cells;

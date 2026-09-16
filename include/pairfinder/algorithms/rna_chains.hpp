@@ -1,12 +1,12 @@
 /**
  * @file rna_chains.hpp
- * @brief Spatial RNA chain connectivity (port of finder/chains.py RNAChains).
+ * @brief Spatial RNA chain connectivity.
  *
  * Builds chains by following O3'-P backbone distance (< 2.75 A) rather than
  * sequence numbers, then exposes 3'/5' neighbor and position lookups used by
  * helix detection. Chain membership and internal 5'->3' order are connectivity-
  * determined (deterministic); only the chain *discovery order* (chain index)
- * depends on iteration order — and selection is insensitive to it.
+ * depends on iteration order - and selection is insensitive to it.
  */
 #ifndef PAIRFINDER_ALGORITHMS_RNA_CHAINS_HPP
 #define PAIRFINDER_ALGORITHMS_RNA_CHAINS_HPP

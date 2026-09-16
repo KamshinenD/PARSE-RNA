@@ -1,6 +1,6 @@
 /**
  * @file scorer.cpp
- * @brief Empirical pair scorer (port of scorer.py + issues.py + features.py + canonical.py).
+ * @brief Empirical pair scorer.
  *
  * Severity uses the Cerny method (Cerny et al. NAR 2026 gkaf1335):
  *   severity = 0              if ProSco >= 5  (Preferred tier)
@@ -10,6 +10,8 @@
  * buckle, propeller, opening, distance, hbond_angles, incorrect_hbond_count).
  */
 #include <pairfinder/scoring/scorer.hpp>
+
+#include <pairfinder/scoring/clashes.hpp>
 
 #include <algorithm>
 #include <array>
@@ -41,10 +43,10 @@ using geometry::Vector3d;
 
 // ---- Sugar-pucker checks (Richardson/Kapral): the base-phosphate perpendicular
 //      (Pperp) and the two report-only categories built on it. ----
-constexpr double kPperpCutoff = 2.9;   // Å: >= C3'-endo, < C2'-endo
+constexpr double kPperpCutoff = 2.9;   // A: >= C3'-endo, < C2'-endo
 const std::unordered_set<std::string> kHelicalWcBp = {"G-C", "C-G", "A-U", "U-A"};
 
-/// Base-phosphate perpendicular distance (Å): perpendicular from the 3' P (the
+/// Base-phosphate perpendicular distance (A): perpendicular from the 3' P (the
 /// next residue's phosphorus) to the extended C1'->N glycosidic vector. Long
 /// (>=2.9) = C3'-endo, short (<2.9) = C2'-endo. nullopt if any atom is missing.
 std::optional<double> compute_pperp(const core::Residue* residue,
@@ -71,7 +73,7 @@ const char* pucker_label(int p) { return p == 3 ? "C3'-endo" : "C2'-endo"; }
 constexpr double kProscoPreferred  = 5.0;   // ProSco >= 5 -> Preferred, severity = 0
 constexpr double kZprimeThreshold  = 5.0;   // |Z'| = 5 -> severity = 1
 
-// Backbone recommendation thresholds (mirror backbone_scorer.py).
+// Backbone recommendation thresholds.
 constexpr double kLowSuitenessMax     = 0.5;  // suiteness below -> residue flagged
 constexpr double kFallbackWidthFactor = 1.0;  // no ProSco cell -> fires beyond 1 width
 
@@ -81,16 +83,16 @@ const std::unordered_set<std::string> kSelfReciprocal = {
     "cWW", "tWW", "cHH", "tHH", "cSS", "tSS"};
 const std::unordered_set<std::string> kSignFlip = {"shear", "stagger", "buckle"};
 
-// H-bond distance policy (hbond_distance_policy.py). Watson-Crick cells judge
+// H-bond distance policy. Watson-Crick cells judge
 // every base-base bond; all other cells judge only the strongest (primary) bond.
 const std::unordered_set<std::string> kWcDistanceCells = {"C-G/cWW", "A-U/cWW"};
 constexpr double kMinPhysicalDistance = 2.2;  // below this: not a real H-bond
 constexpr double kMaxStrongDistance   = 3.5;  // strong (primary) bond cutoff
 
-// 9 individual parameters — mirrors Python ISSUE_KEYS.
-const std::array<const char*, 9> kIssueKeys = {
+// 10 individual parameters.
+const std::array<const char*, 10> kIssueKeys = {
     "shear", "stretch", "stagger", "buckle", "propeller", "opening",
-    "distance", "hbond_angles", "incorrect_hbond_count"};
+    "distance", "hbond_angles", "incorrect_hbond_count", "clash"};
 
 // canonicalize_bp -> (canonical_bp, swapped).
 std::pair<std::string, bool> canonicalize_bp(const std::string& bp, const std::string& lw) {
@@ -115,7 +117,7 @@ bool is_wc_distance_cell(const std::string& bp, const std::string& lw) {
     return kWcDistanceCells.count(canon_bp + "/" + lw) > 0;
 }
 
-// distances_to_score (hbond_distance_policy.py): the base-base distance(s)
+// distances_to_score: the base-base distance(s)
 // whose severity should be taken (max downstream). WC cells return every
 // physical bond; other cells return only the single strongest bond within
 // [kMinPhysicalDistance, kMaxStrongDistance], or empty when none qualifies.
@@ -133,15 +135,19 @@ std::vector<double> distances_to_score(const std::vector<double>& distances,
     return {*std::min_element(strong.begin(), strong.end())};
 }
 
-/// Cerny severity: 0 if ProSco >= 5 (Preferred); else min(1, |Z'|/5).
-/// None ProSco -> 0 (no penalty when cell unavailable).
-/// None Z' with ProSco < 5 -> 1 (maximum severity: outside distribution, no Z' data).
+/// severity = min(1, |Z'|/5) * clamp((5 - ProSco)/5, 0, 1)
+///
+/// The ProSco ramp keeps severity continuous at the boundary; plain Cerny
+/// steps 0 -> ~0.5 there, which made 96-100 unreachable. Reduces to plain
+/// Cerny once ProSco hits 0. No ProSco -> 0. No Z' -> the ramp alone.
+/// Severity from a ProSco / Z' pair, per the Cerny three-tier scheme.
 double severity_from_prosco_zprime(std::optional<double> prosco,
                                    std::optional<double> zprime) {
-    if (!prosco) return 0.0;
-    if (*prosco >= kProscoPreferred) return 0.0;
-    if (!zprime) return 1.0;
-    return std::min(1.0, std::abs(*zprime) / kZprimeThreshold);
+    if (!prosco || *prosco >= kProscoPreferred) return 0.0;
+    const double ramp =
+        std::min(1.0, std::max(0.0, (kProscoPreferred - *prosco) / kProscoPreferred));
+    if (!zprime) return ramp;
+    return std::min(1.0, std::abs(*zprime) / kZprimeThreshold) * ramp;
 }
 
 /// Severity plus the ProSco/Z' that produced it (kept for per-issue reporting).
@@ -151,12 +157,12 @@ struct SevDetail {
     std::optional<double> zprime;
 };
 
-/// Černý three-tier label (Černý et al. NAR 2026 gkaf1335):
+/// Cerny three-tier label (Cerny et al. NAR 2026 gkaf1335):
 ///   Preferred   = ProSco >= 5
 ///   Allowed     = ProSco < 5 and |Z'| <= 5
 ///   Of Concern  = ProSco < 5 and |Z'| > 5  (or Z' unavailable)
 /// Returns "" when the parameter is not ProSco/Z'-scored (e.g. hbond count,
-/// where prosco is none) — triggered issues of that kind carry an empty tier.
+/// where prosco is none) - triggered issues of that kind carry an empty tier.
 std::string prosco_tier(std::optional<double> prosco, std::optional<double> zprime) {
     if (!prosco) return "";
     if (*prosco >= kProscoPreferred) return "Preferred";
@@ -180,7 +186,6 @@ struct Scorer::Impl {
     json categorical;  // categorical_distributions
     json bb_prosco;    // backbone prosco_distributions["backbone"] (per-conformer torsion)
     std::unordered_map<std::string, double> pair_weights;
-    double w_pairs = 0.5, w_residues = 0.5;
     std::unique_ptr<RichardsonClassifier> richardson;
 
     /// ProSco bin lookup with bp/lw -> _ANY/lw -> _ANY/_ANY fallback.
@@ -259,7 +264,7 @@ struct Scorer::Impl {
         return static_cast<double>(canonical - actual) / canonical;
     }
 
-    // --- backbone recommendation (per-conformer ProSco; mirror backbone_scorer.py) ---
+    // --- backbone recommendation (per-conformer ProSco) ---
 
     /// ProSco of a suite torsion against its empirical per-conformer cell, with
     /// circular unwrap onto the branch used at build time (unwrap_center).
@@ -282,6 +287,44 @@ struct Scorer::Impl {
         int idx = static_cast<int>((vu - lo) / (hi - lo) * n);
         idx = std::max(0, std::min(n - 1, idx));
         return cell["prosco_per_bin"][idx].get<double>();
+    }
+
+    /// How far along the way to the conformer centre a recommendation should go.
+    ///
+    /// A full snap (1.0) would put the recommendation at the cluster centre
+    /// itself. That overshoots: real RNA sits *near* conformer
+    /// centres with genuine spread, so a distorted-but-real coordinate is usually
+    /// closer to its own true value than the idealised centre is. Applying the
+    /// full snap moved models away from the truth (held-out error 28.7 deg against
+    /// 25.2 deg for changing nothing).
+    ///
+    /// Fitted against independently determined better models of the same molecule
+    /// (21 lineage clusters, 160 structure pairs, 176,265 flagged torsions) by
+    /// leave-one-cluster-out; alpha = 0.55 was selected in all 20 folds, and
+    /// splitting by tier is slightly better again. Held-out mean error:
+    /// 25.2 (leave alone) / 28.7 (old behaviour) / 21.9 (this).
+    ///
+    /// Above kFullSnapGap the deposited value carries no usable information and
+    /// going all the way to the centre is right (109.7 -> 46.1 deg there).
+    ///
+    /// Applied by damped_target() when building a recommendation.
+    static constexpr double kDampingFixable = 0.45;
+    static constexpr double kDampingOther   = 0.70;
+    static constexpr double kDampingDefault = 0.55;
+    static constexpr double kFullSnapGap    = 90.0;
+
+    static double damped_target(double value, double gap, const std::string& tier) {
+        double alpha = kDampingDefault;
+        if (std::abs(gap) > kFullSnapGap) {
+            alpha = 1.0;
+        } else if (tier == "fixable") {
+            alpha = kDampingFixable;
+        } else if (tier == "flag_only") {
+            alpha = kDampingOther;
+        }
+        double t = std::fmod(value - alpha * gap, 360.0);
+        if (t < 0.0) t += 360.0;
+        return t;
     }
 
     /// Per-residue backbone recommendation. deviations = only torsions that fire
@@ -313,8 +356,10 @@ struct Scorer::Impl {
                                       : (std::abs(gap) > kFallbackWidthFactor * widths[k]);
                 if (fires) {
                     AngleDeviation d;
-                    d.angle = angle; d.value = val; d.target = (*center)[k];
+                    d.angle = angle; d.value = val;
+                    d.target = damped_target(val, gap, tier);
                     d.gap = gap; d.prosco = ps;
+                    d.conformer_center = (*center)[k];
                     rec.deviations.push_back(std::move(d));
                 }
             }
@@ -347,7 +392,7 @@ Scorer::Scorer(const std::filesystem::path& distributions_path,
         json d = json::parse(in);
         if (d.contains("prosco_distributions")) impl_->prosco = d["prosco_distributions"];
     }
-    // Auto-discover z_tables.json alongside prosco_distributions.json (mirrors Python).
+    // Auto-discover z_tables.json alongside prosco_distributions.json.
     {
         const auto z_path = prosco_path.parent_path() / "z_tables.json";
         if (std::filesystem::exists(z_path)) {
@@ -356,7 +401,7 @@ Scorer::Scorer(const std::filesystem::path& distributions_path,
         }
     }
     // Auto-discover backbone_prosco_distributions.json (per-conformer torsion
-    // ProSco used for backbone recommendations; mirrors Python scorer).
+    // ProSco used for backbone recommendations;.
     {
         const auto bb_path = prosco_path.parent_path() / "backbone_prosco_distributions.json";
         if (std::filesystem::exists(bb_path)) {
@@ -371,29 +416,40 @@ Scorer::Scorer(const std::filesystem::path& distributions_path,
         std::ifstream in(weights_path);
         json d = json::parse(in);
         const json& raw = d["penalty_weights"];
-        // Weights already sum to 100 from the Python generator, but renormalise
+        // Weights already sum to 100 as generated, but renormalise
         // defensively in case the file is from a different generation.
         double total = 0.0;
         for (const char* k : kIssueKeys) total += raw.value(k, 0.0);
         for (const char* k : kIssueKeys)
             impl_->pair_weights[k] = total <= 0 ? 100.0 / kIssueKeys.size()
                                                 : raw.value(k, 0.0) * 100.0 / total;
-        if (d.contains("bucket_weights")) {
-            impl_->w_pairs    = d["bucket_weights"].value("W_PAIRS",    0.5);
-            impl_->w_residues = d["bucket_weights"].value("W_RESIDUES", 0.5);
-        }
     }
 }
 
 Scorer::~Scorer() = default;
 Scorer::Scorer(Scorer&&) noexcept = default;
-double Scorer::w_pairs() const { return impl_->w_pairs; }
-double Scorer::w_residues() const { return impl_->w_residues; }
 
-bool Scorer::is_scorable(const classification::ScoredCandidate& p) {
+namespace {
+/// Residue name out of a "<chain>-<name>-<seq>" res_id.
+std::string res_name_of(const std::string& res_id) {
+    const auto a = res_id.find('-');
+    if (a == std::string::npos) return {};
+    const auto b = res_id.find('-', a + 1);
+    return res_id.substr(a + 1, (b == std::string::npos ? res_id.size() : b) - a - 1);
+}
+}  // namespace
+
+bool Scorer::is_scorable(const classification::ScoredCandidate& p,
+                         const core::BaseTyping& typing) {
     if (p.pair_category != "base-base") return false;
     if (p.is_ambiguous) return false;
     if (p.lw_class.empty() || p.lw_class.find('|') != std::string::npos) return false;
+    // The scoring tables are calibrated on RNA, so DNA is not scored - either
+    // side DNA excludes the pair, hybrids included. Filtered here rather than
+    // at candidate generation so the pair is still emitted with a null score,
+    // as ambiguous pairs are. The backbone side already skips DNA.
+    if (typing.is_dna(res_name_of(p.res_id1))) return false;
+    if (typing.is_dna(res_name_of(p.res_id2))) return false;
     return true;
 }
 
@@ -448,7 +504,7 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
     }
 
     // ---- H-bond distance: WC cells judge all base-base bonds; other cells
-    //      judge only the strong (primary) bond (hbond_distance_policy.py).
+    //      judge only the strong (primary) bond.
     //      Keep the ProSco/Z' of the worst (max-severity) scored bond. ----
     std::vector<double> bond_distances;
     bond_distances.reserve(hbonds.size());
@@ -477,6 +533,16 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
         if (s > 0.0) issues["incorrect_hbond_count"] = SevDetail{s, std::nullopt, std::nullopt};
     }
 
+    // ---- Steric clash: graded on heavy-atom overlap (no ProSco/Z') ----
+    // Gate on kClashThreshold: the ungated overlap charges score for ordinary
+    // vdW proximity. worst_overlap() returns the contact pair_clash() gates on,
+    // so this is equivalent and computes it once. Raw value kept on PairScore.
+    const std::optional<double> clash_overlap = worst_overlap(res1, res2, chem);
+    if (clash_overlap && *clash_overlap > kClashThreshold) {
+        const double s = clash_severity(*clash_overlap);
+        if (s > 0.0) issues["clash"] = SevDetail{s, std::nullopt, std::nullopt};
+    }
+
     // Build weighted penalty list in kIssueKeys order, then sort by descending penalty.
     std::vector<IssuePenalty> weighted;
     double penalty = 0.0;
@@ -484,7 +550,11 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
         const auto it = issues.find(k);
         if (it == issues.end()) continue;
         const SevDetail& d = it->second;
-        const double w = impl_->pair_weights.at(k) * d.severity;
+        // A weights file generated before `clash` existed simply has no entry:
+        // treat it as weight 0 (detected and reported, but costs no score)
+        // rather than throwing.
+        const auto wit = impl_->pair_weights.find(k);
+        const double w = (wit == impl_->pair_weights.end() ? 0.0 : wit->second) * d.severity;
         IssuePenalty ip;
         ip.issue = k;
         ip.weight = w;
@@ -508,18 +578,30 @@ PairScore Scorer::score_pair(const classification::ScoredCandidate& pair, const 
     out.score   = std::max(0.0, std::min(100.0, 100.0 - penalty));
     out.penalty = penalty;
     out.issues  = std::move(weighted);
+    out.clash_overlap = clash_overlap;
     return out;
 }
 
 namespace {
 
+// Longest O3'(i-1) - P(i) accepted as the phosphodiester bond joining two
+// residues into one suite. Real links are extremely tight: over a 300-structure
+// sample the median is 1.60 A and the 99th percentile 1.62 A, with only 0.06%
+// above 2.0 A. Those stragglers are not stretched bonds, they are residues that
+// are not joined at all.
+constexpr double kMaxPhosphodiester = 2.0;
+
 // Map each res_id to its backbone predecessor's res_id: the residue
 // immediately preceding it within the same chain, ordered by (seq, icode),
 // when their integer sequence numbers differ by at most one (equal when only
-// the insertion code advances, e.g. 20 -> 20A -> 21). Mirrors the Python
-// features.build_predecessor_index. Negative seqs / insertion codes included.
+// the insertion code advances, e.g. 20 -> 20A -> 21) AND the two are actually
+// bonded. Numbering alone is not enough: 1HMH labels separate strands with the
+// same numbers plus an 'L' suffix, so 48 of its 87 suites were being built
+// between residues 26 to 40 A apart, which classify as outliers and dragged its
+// suiteness from the deposited 0.66 down to 0.283.
 std::unordered_map<std::string, std::string> build_predecessor_index(
-    const std::unordered_map<std::string, ResidueTorsions>& tors) {
+    const std::unordered_map<std::string, ResidueTorsions>& tors,
+    const std::unordered_map<std::string, const core::Residue*>& res_by_id) {
     std::map<std::string, std::vector<std::tuple<long, std::string, std::string>>> by_chain;
     for (const auto& [rid, t] : tors) {
         (void)t;
@@ -534,8 +616,17 @@ std::unordered_map<std::string, std::string> build_predecessor_index(
         for (std::size_t i = 1; i < residues.size(); ++i) {
             const long prev_num = std::get<0>(residues[i - 1]);
             const long cur_num  = std::get<0>(residues[i]);
-            if (prev_num == cur_num || prev_num == cur_num - 1)
-                predecessor[std::get<2>(residues[i])] = std::get<2>(residues[i - 1]);
+            if (prev_num != cur_num && prev_num != cur_num - 1) continue;
+            const std::string& prev_id = std::get<2>(residues[i - 1]);
+            const std::string& cur_id  = std::get<2>(residues[i]);
+            const auto pit = res_by_id.find(prev_id);
+            const auto cit = res_by_id.find(cur_id);
+            if (pit == res_by_id.end() || cit == res_by_id.end()) continue;
+            const auto* o3 = pit->second->get_atom("O3'");
+            const auto* ph = cit->second->get_atom("P");
+            if (!o3 || !ph) continue;
+            if ((o3->coords - ph->coords).norm() > kMaxPhosphodiester) continue;
+            predecessor[cur_id] = prev_id;
         }
     }
     return predecessor;
@@ -570,19 +661,27 @@ std::optional<std::array<double, 7>> build_suite(
 
 double round2(double v) { return std::round(v * 100.0) / 100.0; }
 
-// DNA residues have no RNA backbone suite — exclude them so they don't deflate
+// DNA residues have no RNA backbone suite - exclude them so they don't deflate
 // residues_score for DNA/RNA complexes (matches the wwPDB rnasuiteness RNA-only
-// convention and the Python backbone scorer). res_id is chain-resname-num
-// (e.g. N-DA-102); DNA resnames are two-letter D<base>.
-bool is_dna_residue(const std::string& res_id) {
+// convention). res_id is chain-resname-num
+// (e.g. N-DA-102).
+//
+// The test is data-driven rather than name-based: modified DNA carries no ``D``
+// prefix (2'-fluoro AF2/GF2/CFZ/UFT, BRU, ...), and matching only D<base> let
+// those through to be scored as RNA. 3P4A is built entirely from 2'-fluoro
+// residues, so it scored 0.811 while the wwPDB - correctly, for an RNA-only
+// metric - reports 0.
+// A residue carries an RNA backbone suite only if it is a polymer nucleotide.
+// DNA has no RNA suite, and a free nucleotide or cofactor (ATP, GTP, ... typed
+// LIGAND in the ligand DB) is not a polymer residue at all: it may still pair,
+// which is why it is parsed, but it has no place in an RNA backbone score.
+bool no_rna_suite(const std::string& res_id, const core::BaseTyping& typing) {
     const auto a = res_id.find('-');
     if (a == std::string::npos) return false;
     const auto b = res_id.find('-', a + 1);
     const std::string name =
         res_id.substr(a + 1, (b == std::string::npos ? res_id.size() : b) - a - 1);
-    return name.size() == 2 && name[0] == 'D' &&
-           (name[1] == 'A' || name[1] == 'C' || name[1] == 'G' ||
-            name[1] == 'T' || name[1] == 'U');
+    return typing.is_dna(name) || typing.is_ligand(name);
 }
 
 }  // namespace
@@ -596,9 +695,9 @@ StructureScore Scorer::score_structure(
         for (const auto& res : chain.residues()) res_by_id[res.res_id()] = &res;
 
     const auto tors       = compute_all_torsions(structure);
-    const auto pred_index = build_predecessor_index(tors);
+    const auto pred_index = build_predecessor_index(tors, res_by_id);
     // 3'-successor (invert predecessor) for the Pperp phosphate, and helix
-    // membership over the selected pairs — both drive the report-only sugar
+    // membership over the selected pairs - both drive the report-only sugar
     // pucker flags (do not affect the score).
     std::unordered_map<std::string, std::string> succ_index;
     succ_index.reserve(pred_index.size());
@@ -609,15 +708,15 @@ StructureScore Scorer::score_structure(
     StructureScore ss;
     for (std::size_t i = 0; i < selected.size(); ++i) {
         const auto& sc = selected[i];
-        if (!is_scorable(sc)) { ++ss.skipped_pairs; continue; }
+        if (!is_scorable(sc, typing)) { ++ss.skipped_pairs; continue; }
         const auto r1 = res_by_id.find(sc.res_id1);
         const auto r2 = res_by_id.find(sc.res_id2);
         if (r1 == res_by_id.end() || r2 == res_by_id.end()) continue;
         PairScore ps = score_pair(sc, *r1->second, *r2->second, finder, chem, typing);
-        // "Unusual sugar pucker": C2'-endo (by δ) in a helical cWW G-C/A-U pair.
+        // "Unusual sugar pucker": C2'-endo (by delta) in a helical cWW G-C/A-U pair.
         if (in_helix[i] && ps.lw_class == "cWW" && kHelicalWcBp.count(ps.bp_type)) {
             for (const core::Residue* res : {r1->second, r2->second}) {
-                if (is_dna_residue(res->res_id())) continue;  // DNA is natively C2'-endo
+                if (no_rna_suite(res->res_id(), typing)) continue;  // DNA is natively C2'-endo
                 const auto tit = tors.find(res->res_id());
                 if (tit == tors.end() || !tit->second.delta) continue;
                 const double delta = *tit->second.delta;
@@ -644,8 +743,8 @@ StructureScore Scorer::score_structure(
         if (!suite) continue;
         const SuiteResult sr = impl_->richardson->classify(*suite);
         // Full torsion row for every classifiable residue (incl. DNA, outliers,
-        // L-RNA) — captured before the RNA-only / L-RNA scoring filters below so
-        // it mirrors extract_backbone_torsions.py (torsions_all.csv).
+        // L-RNA) - captured before the RNA-only / L-RNA scoring filters below,
+        // so the emitted table covers every residue the parser could type.
         if (collect_backbone) {
             BackboneTorsion bt;
             bt.res_id = rid;
@@ -659,14 +758,23 @@ StructureScore Scorer::score_structure(
             bt.is_outlier = sr.is_outlier;
             ss.backbone_torsions.push_back(std::move(bt));
         }
-        if (is_dna_residue(rid)) continue;  // RNA-only backbone score (see helper)
+        if (no_rna_suite(rid, typing)) continue;  // RNA-only backbone score (see helper)
+        // ...and the suite's delta/epsilon/zeta come from the PREDECESSOR, so a
+        // residue whose 5' neighbour is not RNA polymer has no RNA suite either.
+        // 3P4C/3P4D alternate RNA with 2'-fluoro residues, so every suite there
+        // was scored off a DNA sugar; 6E0O/4HOS/4HOR begin with an initiating
+        // ATP/UTP/CTP, which is covalently linked but is a free nucleotide, not
+        // a polymer residue. The wwPDB reports ~0 for both cases.
+        if (const auto pit = pred_index.find(rid);
+            pit != pred_index.end() && no_rna_suite(pit->second, typing))
+            continue;
         if (sr.suiteness <= 0.0) {
             // L-RNA enantiomer check: a rejected suite may be mirror-image RNA
             // (e.g. a Spiegelmer aptamer). Negate every torsion (360 - t) and
-            // re-classify; if the mirror fits a D-RNA cluster it is L-RNA —
+            // re-classify; if the mirror fits a D-RNA cluster it is L-RNA  -
             // exclude it (D-RNA suiteness doesn't apply; the backbone is
             // genuinely high quality). A real D-RNA outlier won't fit even when
-            // mirrored, so it still scores 0. Mirrors the Python backbone scorer.
+            // mirrored, so it still scores 0.
             std::array<double, 7> mirror;
             for (int k = 0; k < 7; ++k)
                 mirror[k] = std::fmod(360.0 - (*suite)[k], 360.0);
@@ -677,7 +785,7 @@ StructureScore Scorer::score_structure(
         rs.suiteness = sr.suiteness;
         rs.score    = std::max(0.0, std::min(100.0, sr.suiteness * 100.0));
         rs.recommendation = impl_->build_recommendation(*suite, sr);
-        // Sugar pucker: δ, Pperp, and the report-only OUTLIER (δ/Pperp disagree).
+        // Sugar pucker: delta, Pperp, and the report-only OUTLIER (delta/Pperp disagree).
         if (t.delta) {
             const double delta = *t.delta;
             rs.delta = delta;
@@ -717,16 +825,16 @@ StructureScore Scorer::score_structure(
     const double rm = mean(ss.residue_scores, [](const ResidueScore& r) { return r.score; });
     ss.pairs_score    = round2(pm);
     ss.residues_score = round2(rm);
-    double overall;
-    if (!ss.pair_scores.empty() && !ss.residue_scores.empty())
-        overall = impl_->w_pairs * pm + impl_->w_residues * rm;
-    else if (!ss.pair_scores.empty())
-        overall = pm;
-    else if (!ss.residue_scores.empty())
-        overall = rm;
-    else
-        overall = 0.0;
-    ss.overall = round2(overall);
+
+    // Whole-structure RNA-RNA clashes (report-only; includes residues that are
+    // not a base pair). structure_clashes takes an owning map, so build one
+    // from the parsed chains.
+    {
+        std::unordered_map<std::string, core::Residue> owned;
+        owned.reserve(res_by_id.size());
+        for (const auto& [rid, res] : res_by_id) owned.emplace(rid, *res);
+        ss.clashes = structure_clashes(owned, typing, chem);
+    }
     return ss;
 }
 

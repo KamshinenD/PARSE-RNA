@@ -2,8 +2,8 @@
  * @file pdb_parser.cpp
  * @brief GEMMI-backed structure loader (PDB / mmCIF / .gz).
  *
- * Replicates find_pair_2's GEMMI parser conventions (io/{pdb,cif}_parser.cpp)
- * so the parsed Structure matches its pdb_atoms JSON exactly:
+ * Replicates the reference parser conventions so the parsed Structure matches
+ * the reference pdb_atoms JSON exactly:
  *   - first model only
  *   - chain = gemmi chain name; seq = auth seqid.num; insertion code appended
  *   - alt-loc filter: keep ' ' / 'A' / '1' only (drops B-only atoms)
@@ -26,6 +26,7 @@
 #include <gemmi/mmread.hpp>
 #include <gemmi/model.hpp>
 
+#include <pairfinder/core/base_typing.hpp>
 #include <pairfinder/core/nucleotide_registry.hpp>
 #include <pairfinder/core/resource_locator.hpp>
 #include <pairfinder/core/residue.hpp>
@@ -37,6 +38,14 @@ namespace {
 std::string upper(std::string s) {
     for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return s;
+}
+
+// The ligand H-bond DB's nucleotide typing, loaded once. The registry below
+// covers frame templates; this covers everything the rest of the pipeline can
+// type, and the two disagree on ~64 codes.
+const core::BaseTyping& base_typing() {
+    static const core::BaseTyping typing(resources::config("ligand_hbond_db.json").string());
+    return typing;
 }
 
 // modified_nucleotides.json: env PARSE_NT_CONFIG, else the bundled resource.
@@ -54,10 +63,10 @@ bool is_water(const std::string& name) {
     return kWaters.count(upper(name)) != 0;
 }
 
-// keep alt-loc ' ', '\0', 'A', '1' (find_pair_2 check_alt_loc_filter)
+// keep alt-loc ' ', '\0', 'A', '1'
 bool keep_altloc(char a) { return a == ' ' || a == '\0' || a == 'A' || a == '1'; }
 
-// find_pair_2 atom-name exact matches, applied to the trimmed GEMMI name after
+// Atom-name exact matches, applied to the trimmed GEMMI name after
 // '*'->'\'' replacement. Returns the normalized (trimmed) atom name.
 std::string normalize_atom(std::string name) {
     for (char& c : name)
@@ -92,10 +101,19 @@ core::Structure parse_pdb(const std::filesystem::path& path) {
             const std::string res_name = residue.name;
             const bool is_hetatm = (residue.het_flag == 'H');
             // HETATM kept only for modified nucleotides (standard ATOM always kept);
-            // waters/ligands dropped (find_pair_2 default include_hetatm=false).
+            // waters/ligands dropped (HETATM included only for modified bases).
             if (is_hetatm) {
                 if (is_water(res_name)) continue;
-                if (!nucleotide_registry().lookup(res_name).has_value()) continue;
+                // Keep if EITHER registry knows it. modified_nucleotides.json
+                // drives frame-template selection and misses ~64 codes the
+                // ligand DB types as RNA/DNA (U37, U8U, M3X, SRA, ...). Dropping
+                // those does not just lose one residue: it breaks the chain, so
+                // the neighbours lose their predecessor and no suite can be
+                // built. 4J7M scored 0 residues that way against a deposited
+                // rnasuiteness of 0.75.
+                if (!nucleotide_registry().lookup(res_name).has_value() &&
+                    !base_typing().is_known_nucleotide(res_name))
+                    continue;
             }
 
             const long seq = residue.seqid.num.value;

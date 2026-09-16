@@ -16,8 +16,8 @@ namespace {
 const std::unordered_set<std::string> kPurines = {"A", "G", "I"};
 const std::unordered_set<std::string> kPyrimidines = {"C", "U", "T"};
 
-// DNA prefix + a small set of common modified codes. TODO: replace with the
-// full data-driven map ported from ligand_hbond_db.json.
+// DNA prefix + a small set of common modified codes. The full data-driven map
+// lives in the bundled base-typing cache; this is the compiled-in fallback.
 const std::unordered_map<std::string, std::string>& base_map() {
     static const std::unordered_map<std::string, std::string> m = {
         {"DA", "A"}, {"DG", "G"}, {"DC", "C"}, {"DT", "T"}, {"DU", "U"},
@@ -36,7 +36,7 @@ std::string normalize_base_type(std::string_view residue_name) {
     if (kPurines.count(key) || kPyrimidines.count(key)) return key;
     const auto it = base_map().find(key);
     if (it != base_map().end()) return it->second;
-    return key;  // unknown modified base: keep original (matches Python)
+    return key;  // unknown modified base: keep original
 }
 
 bool is_purine(std::string_view base_type) {

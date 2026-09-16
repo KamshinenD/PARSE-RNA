@@ -2,7 +2,7 @@
  * @file atom.hpp
  * @brief A single atom: name, type, element, coordinates.
  *
- * Value type. Mirrors the Python ``Atom`` dataclass (name, coords, element).
+ * Value type.
  */
 #ifndef PAIRFINDER_CORE_ATOM_HPP
 #define PAIRFINDER_CORE_ATOM_HPP

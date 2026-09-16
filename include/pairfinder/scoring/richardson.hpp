@@ -1,6 +1,6 @@
 /**
  * @file richardson.hpp
- * @brief Richardson RNA backbone suite classifier (port of scoring/richardson.py).
+ * @brief Richardson RNA backbone suite classifier.
  *
  * Loads richardson_suites.json (54 conformers + widths + triage/sieve +
  * satellite overrides) and classifies a 7D suite
@@ -23,10 +23,10 @@ inline constexpr std::array<const char*, 7> kSuiteAngleNames = {
     "delta_prev", "epsilon_prev", "zeta_prev",
     "alpha", "beta", "gamma", "delta"};
 
-/// Result of classifying one 7D backbone suite (mirror of Python SuiteResult).
+/// Result of classifying one 7D backbone suite.
 struct SuiteResult {
     std::string conformer;   ///< matched conformer name, or "!!" for outliers
-    double suiteness = 0.0;  ///< 0..1, 0 for outliers
+    double suiteness = 0.0;  ///< 0.1, 0 for outliers
     bool is_outlier = true;
     double distance = -1.0;  ///< 7D L3 distance to the matched center (-1 if none)
     std::string bin;         ///< pucker-pucker-gamma bin ("33p"); empty if triage/sieve fail
@@ -43,7 +43,7 @@ public:
     RichardsonClassifier(RichardsonClassifier&&) noexcept;
 
     /// Suiteness in [0,1] (0 for outliers). suite = 7 angles, each already %360.
-    /// Lean hot path (no allocation) — used to compute the residue score.
+    /// Lean hot path (no allocation) - used to compute the residue score.
     double suiteness(const std::array<double, 7>& suite) const;
 
     /// Full classification: conformer name + suiteness + outlier flag. Used when
@@ -53,14 +53,14 @@ public:
     /// 7D cluster center for a conformer name, or nullptr if unknown.
     const std::array<double, 7>* center_for(const std::string& conformer) const;
 
-    /// Nearest conformer by summed absolute angular gap (L1) — fix target for an
+    /// Nearest conformer by summed absolute angular gap (L1) - fix target for an
     /// outlier suite that fits no cluster. Empty string if the table is empty.
     std::string nearest_conformer(const std::array<double, 7>& suite) const;
 
     /// Baseline per-axis tolerance widths (fallback flagging for sparse cells).
     const std::array<double, 7>& normal_widths() const;
 
-    /// Sugar pucker from a residue's δ torsion: 3 = C3'-endo, 2 = C2'-endo,
+    /// Sugar pucker from a residue's delta torsion: 3 = C3'-endo, 2 = C2'-endo,
     /// 0 = between the two sieve bands (C3' [60,105], C2' [125,165]).
     int pucker(double delta) const;
 

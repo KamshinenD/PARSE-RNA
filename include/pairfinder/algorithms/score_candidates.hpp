@@ -25,8 +25,7 @@
 
 namespace pairfinder::algorithms::classification {
 
-/// A scored candidate pair (mirrors the fields of Python CandidateInfo that the
-/// downstream selection / output use).
+/// A scored candidate pair: the fields downstream selection and output use.
 struct ScoredCandidate {
     std::string res_id1;
     std::string res_id2;

@@ -1,6 +1,6 @@
 /**
  * @file chemistry.cpp
- * @brief H-bond capacities, connectivity, and slot prediction (port of geometry.py).
+ * @brief H-bond capacities, connectivity, and slot prediction.
  */
 #include <pairfinder/algorithms/hbond/chemistry.hpp>
 
@@ -301,7 +301,7 @@ HBondChemistry::HBondChemistry(const std::filesystem::path& ligand_db_path, bool
     // Phosphate-oxygen spelling aliases (OP1<->O1P, ...): the DB lists OP-form,
     // but pdb_atoms JSON uses O-form. Standard maps already carry both; mirror
     // that for DB-derived modified residues so phosphate H-bonds are found
-    // regardless of spelling. (Matches geometry.py _PHOSPHATE_ALIAS.)
+    // regardless of spelling.
     static const std::unordered_map<std::string, std::string> phos_alias = {
         {"OP1", "O1P"}, {"OP2", "O2P"}, {"OP3", "O3P"},
         {"O1P", "OP1"}, {"O2P", "OP2"}, {"O3P", "OP3"}};

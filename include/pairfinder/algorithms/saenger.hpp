@@ -1,7 +1,6 @@
 /**
  * @file saenger.hpp
- * @brief Saenger 28-type H-bond pattern matching (port of classification/saenger.py
- *        + edge_classifier.match_saenger), used for ambiguity resolution.
+ * @brief Saenger 28-type H-bond pattern matching, used for ambiguity resolution.
  */
 #ifndef PAIRFINDER_ALGORITHMS_SAENGER_HPP
 #define PAIRFINDER_ALGORITHMS_SAENGER_HPP

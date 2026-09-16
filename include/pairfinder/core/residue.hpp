@@ -2,11 +2,11 @@
  * @file residue.hpp
  * @brief A nucleotide residue: identity + its atoms.
  *
- * Mirrors the Python ``Residue`` exactly:
+ * Fields:
  *   - constructed from (res_id, base_type), res_id == "<chain>-<resname>-<seq>"
  *   - chain()/seq_num() derived by splitting res_id
  *   - base_type is the parse-time name (upper/stripped; DNA & modified codes are
- *     KEPT, never converted) — conversion to a parent base happens only in
+ *     KEPT, never converted) - conversion to a parent base happens only in
  *     is_purine/is_pyrimidine/normalize_base_type below.
  *   - add_atom overwrites an existing atom of the same name (dict semantics).
  */
@@ -52,7 +52,7 @@ public:
     Residue(std::string res_id, std::string base_type)
         : res_id_(std::move(res_id)), base_type_(std::move(base_type)) {}
 
-    /// Overwrites any existing atom with the same name (matches Python dict).
+    /// Overwrites any existing atom with the same name.
     void add_atom(const std::string& name, const geometry::Vector3d& coords,
                   const std::string& element = "", char alt_loc = ' ');
 

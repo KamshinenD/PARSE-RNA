@@ -1,6 +1,6 @@
 /**
  * @file pair_parameters.cpp
- * @brief Six base-pair parameters (port of parameters.py compute_pair_parameters).
+ * @brief Six base-pair parameters.
  */
 #include <pairfinder/scoring/pair_parameters.hpp>
 

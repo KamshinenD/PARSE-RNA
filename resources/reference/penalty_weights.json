@@ -1,13 +1,205 @@
 {
+  "schema_version": "4.0-per-parameter-shannon",
+  "generated_at": "2026-09-15",
+  "weight_scheme": "shannon-log-odds-per-parameter",
+  "method": {
+    "_documentation": [
+      "Per-parameter penalty weights using pure Shannon (log-odds) approach.",
+      "",
+      "For each of the 9 parameters individually:",
+      "  - Compute mean Cerny severity in GOOD set vs POOR set",
+      "  - weight_i = log(s_poor_i / s_good_i)  [clipped to >= 0]",
+      "  - Renormalize to sum = 100",
+      "",
+      "Severity (Cerny et al. NAR 2026 gkaf1335, ramped off the boundary):",
+      "  - severity = 0 if ProSco >= 5 (Preferred)",
+      "  - severity = min(1, |Z'|/5) * clamp((5 - ProSco)/5, 0, 1) otherwise",
+      "  - clash    = clamp((overlap - 0.4)/(0.9 - 0.4), 0, 1)",
+      "",
+      "At runtime:",
+      "    penalty = \u03a3 penalty_weights[param] \u00d7 severity[param]",
+      "    score   = max(0, min(100, 100 \u2212 penalty))"
+    ],
+    "severity_definition": "Cerny ramped: 0 if ProSco >= 5, else min(1, |Z'|/5) * clamp((5 - ProSco)/5, 0, 1); clash: clamp((overlap - 0.4)/(0.9 - 0.4), 0, 1)",
+    "prosco_preferred_threshold": 5.0
+  },
+  "good_reference_set": {
+    "n_pairs": 364169,
+    "feature_dir": "/Users/kdewan2/Desktop/Projects/find-pair-score-rna/PARSE-RNA-Analysis/data/reference/high_quality_features",
+    "distributions": "/Users/kdewan2/Desktop/Projects/find-pair-score-rna/PARSE-RNA-Analysis/data/reference/scoring_tables/parameter_distributions.json",
+    "mean_severity": {
+      "stagger": 0.018442,
+      "clash": 0.001845,
+      "hbond_angles": 0.036118,
+      "shear": 0.014411,
+      "distance": 0.025386,
+      "stretch": 0.01643,
+      "buckle": 0.014122,
+      "propeller": 0.013709,
+      "opening": 0.014922,
+      "incorrect_hbond_count": 0.01812
+    }
+  },
+  "poor_reference_set": {
+    "n_pairs": 503623,
+    "feature_dir": "/Users/kdewan2/Desktop/Projects/find-pair-score-rna/PARSE-RNA-Analysis/data/reference/low_quality_features",
+    "mean_severity": {
+      "stagger": 0.054445,
+      "clash": 0.004437,
+      "hbond_angles": 0.081434,
+      "shear": 0.031721,
+      "distance": 0.052168,
+      "stretch": 0.033761,
+      "buckle": 0.02857,
+      "propeller": 0.027423,
+      "opening": 0.029496,
+      "incorrect_hbond_count": 0.021101
+    }
+  },
+  "raw_logodds_nats": {
+    "stagger": 1.0824,
+    "clash": 0.8764,
+    "hbond_angles": 0.8129,
+    "shear": 0.7889,
+    "distance": 0.7202,
+    "stretch": 0.7201,
+    "buckle": 0.7045,
+    "propeller": 0.6932,
+    "opening": 0.6813,
+    "incorrect_hbond_count": 0.1522
+  },
   "penalty_weights": {
-    "stagger": 18.8096,
-    "hbond_angles": 13.3629,
-    "stretch": 12.6462,
-    "opening": 12.419,
-    "distance": 12.1265,
-    "propeller": 11.7832,
-    "buckle": 10.8098,
-    "shear": 5.1558,
-    "incorrect_hbond_count": 2.8871
-  }
+    "stagger": 14.967,
+    "clash": 12.1175,
+    "hbond_angles": 11.2406,
+    "shear": 10.908,
+    "distance": 9.9583,
+    "stretch": 9.9571,
+    "buckle": 9.7415,
+    "propeller": 9.5851,
+    "opening": 9.4201,
+    "incorrect_hbond_count": 2.1048
+  },
+  "features": [
+    "shear",
+    "stretch",
+    "stagger",
+    "buckle",
+    "propeller",
+    "opening",
+    "distance",
+    "hbond_angles",
+    "incorrect_hbond_count",
+    "clash"
+  ],
+  "report_groups": {
+    "Pair In-Plane Displacement": [
+      "shear",
+      "stretch"
+    ],
+    "Pair Non-Coplanarity": [
+      "stagger",
+      "buckle"
+    ],
+    "Propeller Twist": [
+      "propeller"
+    ],
+    "Pair Opening": [
+      "opening"
+    ],
+    "H-Bond Distance": [
+      "distance"
+    ],
+    "H-Bond Angles": [
+      "hbond_angles"
+    ],
+    "Incorrect H-Bond Count": [
+      "incorrect_hbond_count"
+    ],
+    "Steric Clash": [
+      "clash"
+    ]
+  },
+  "summary_table": [
+    {
+      "param": "stagger",
+      "mean_sev_good": 0.0184,
+      "mean_sev_poor": 0.0544,
+      "ratio_poor_over_good": 2.95,
+      "raw_logodds": 1.0824,
+      "weight": 14.97
+    },
+    {
+      "param": "clash",
+      "mean_sev_good": 0.0018,
+      "mean_sev_poor": 0.0044,
+      "ratio_poor_over_good": 2.4,
+      "raw_logodds": 0.8764,
+      "weight": 12.12
+    },
+    {
+      "param": "hbond_angles",
+      "mean_sev_good": 0.0361,
+      "mean_sev_poor": 0.0814,
+      "ratio_poor_over_good": 2.25,
+      "raw_logodds": 0.8129,
+      "weight": 11.24
+    },
+    {
+      "param": "shear",
+      "mean_sev_good": 0.0144,
+      "mean_sev_poor": 0.0317,
+      "ratio_poor_over_good": 2.2,
+      "raw_logodds": 0.7889,
+      "weight": 10.91
+    },
+    {
+      "param": "distance",
+      "mean_sev_good": 0.0254,
+      "mean_sev_poor": 0.0522,
+      "ratio_poor_over_good": 2.05,
+      "raw_logodds": 0.7202,
+      "weight": 9.96
+    },
+    {
+      "param": "stretch",
+      "mean_sev_good": 0.0164,
+      "mean_sev_poor": 0.0338,
+      "ratio_poor_over_good": 2.05,
+      "raw_logodds": 0.7201,
+      "weight": 9.96
+    },
+    {
+      "param": "buckle",
+      "mean_sev_good": 0.0141,
+      "mean_sev_poor": 0.0286,
+      "ratio_poor_over_good": 2.02,
+      "raw_logodds": 0.7045,
+      "weight": 9.74
+    },
+    {
+      "param": "propeller",
+      "mean_sev_good": 0.0137,
+      "mean_sev_poor": 0.0274,
+      "ratio_poor_over_good": 2.0,
+      "raw_logodds": 0.6932,
+      "weight": 9.59
+    },
+    {
+      "param": "opening",
+      "mean_sev_good": 0.0149,
+      "mean_sev_poor": 0.0295,
+      "ratio_poor_over_good": 1.98,
+      "raw_logodds": 0.6813,
+      "weight": 9.42
+    },
+    {
+      "param": "incorrect_hbond_count",
+      "mean_sev_good": 0.0181,
+      "mean_sev_poor": 0.0211,
+      "ratio_poor_over_good": 1.16,
+      "raw_logodds": 0.1522,
+      "weight": 2.1
+    }
+  ]
 }

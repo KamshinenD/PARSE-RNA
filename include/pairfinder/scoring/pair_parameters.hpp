@@ -1,7 +1,7 @@
 /**
  * @file pair_parameters.hpp
  * @brief Tsukuba/X3DNA six base-pair parameters from two frames
- *        (port of scorer_parameters/parameters.py compute_pair_parameters).
+ *.
  */
 #ifndef PAIRFINDER_SCORING_PAIR_PARAMETERS_HPP
 #define PAIRFINDER_SCORING_PAIR_PARAMETERS_HPP

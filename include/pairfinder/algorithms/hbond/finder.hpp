@@ -2,7 +2,7 @@
  * @file finder.hpp
  * @brief Slot-based H-bond finder with global (per-pair) optimal selection.
  *
- * Faithful port of the Python ``hbond/finder.py`` HBondFinder. The pipeline
+ * Slot-based HBondFinder. The pipeline
  * entry point is find_between(res1, res2): collect donor->acceptor candidates
  * within max_distance, score each against predicted donor-H / acceptor-LP slot
  * directions, then pick the maximum non-conflicting set (two candidates conflict

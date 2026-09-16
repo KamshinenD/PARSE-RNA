@@ -1,6 +1,6 @@
 /**
  * @file hbond_angles.hpp
- * @brief H-bond angle geometry (port of scorer_parameters/hbond_angles.py).
+ * @brief H-bond angle geometry.
  *
  * The angle at an atom is the largest (neighbor - atom - partner) angle over
  * the atom's bonded neighbors (connectivity from the chemistry DB, falling back

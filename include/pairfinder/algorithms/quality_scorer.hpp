@@ -1,6 +1,6 @@
 /**
  * @file quality_scorer.hpp
- * @brief Composite 0-1 quality score for pair ranking (port of finder/quality_scorer.py).
+ * @brief Composite 0-1 quality score for pair ranking.
  *
  * This is the SELECTION ranking metric (candidate.quality_score), distinct from
  * the user-facing empirical Scorer (Step 8). Combines RMSD-to-template, H-bond

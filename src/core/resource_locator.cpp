@@ -53,7 +53,7 @@ std::filesystem::path resolve_root() {
     const std::filesystem::path exe = executable_path();
     if (!exe.empty()) {
         const std::filesystem::path dir = exe.parent_path();
-        for (const char* rel : {"resources", "../resources", "../share/parse/resources"}) {
+        for (const char* rel : {"resources", "./resources", "./share/parse/resources"}) {
             std::filesystem::path p = dir / rel;
             if (valid_root(p)) {
                 std::error_code ec;
@@ -62,7 +62,7 @@ std::filesystem::path resolve_root() {
             }
         }
     }
-    for (const char* rel : {"resources", "../resources", "../../resources"}) {
+    for (const char* rel : {"resources", "./resources", "././resources"}) {
         std::filesystem::path p(rel);
         if (valid_root(p)) return std::filesystem::absolute(p);
     }

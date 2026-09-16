@@ -1,6 +1,6 @@
 /**
  * @file rigid_body.cpp
- * @brief Port of validation/rigid_body.py compute_rigid_body_parameters.
+ * @brief Rigid-body pair parameters (compute_rigid_body_parameters).
  */
 #include <pairfinder/algorithms/rigid_body.hpp>
 
@@ -44,7 +44,7 @@ Vector3d matvec(const Mat3& m, const Vector3d& v) {
 }
 
 // (axis unit vector, angle in radians) from a rotation matrix; mirrors
-// rigid_body._matrix_to_axis_angle exactly (incl. the theta≈pi branch).
+// rigid_body._matrix_to_axis_angle exactly (incl. the theta~pi branch).
 std::pair<Vector3d, double> matrix_to_axis_angle(const Mat3& R) {
     double cos_theta = std::clamp((R[0][0] + R[1][1] + R[2][2] - 1.0) / 2.0, -1.0, 1.0);
     const double theta = std::acos(cos_theta);

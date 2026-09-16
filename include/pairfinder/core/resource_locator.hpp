@@ -5,14 +5,13 @@
  *
  * Resolution order (computed once):
  *   1. $PAIRFINDER_RESOURCES (explicit override)
- *   2. executable-relative: <exe>/resources, <exe>/../resources,
- *      <exe>/../share/pairfinder/resources   (deployed/installed layout)
- *   3. cwd-relative: resources, ../resources, ../../resources
+ *   2. executable-relative: <exe>/resources, <exe>/./resources,
+ *      <exe>/./share/pairfinder/resources   (deployed/installed layout)
+ *   3. cwd-relative: resources, ./resources, ././resources
  *   4. compile-time source path PAIRFINDER_SOURCE_RESOURCES (dev fallback)
  *
- * This makes the tool self-contained — it carries its own data and no longer
- * reaches into find_pair_2/ or prototyped-pair-finder-main/. Mirrors x3dna's
- * config::ResourceLocator.
+ * This makes the tool self-contained: it carries its own data rather than
+ * reaching into a sibling source tree. Mirrors x3dna's config::ResourceLocator.
  */
 #ifndef PAIRFINDER_CORE_RESOURCE_LOCATOR_HPP
 #define PAIRFINDER_CORE_RESOURCE_LOCATOR_HPP

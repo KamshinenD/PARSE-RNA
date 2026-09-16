@@ -43,6 +43,7 @@ add_library(pairfinder_core
     src/scoring/torsions.cpp
     src/scoring/richardson.cpp
     src/scoring/scorer.cpp
+    src/scoring/clashes.cpp
     src/io/pdb_parser.cpp
     src/pipeline.cpp
 )

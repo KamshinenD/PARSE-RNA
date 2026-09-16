@@ -2,7 +2,7 @@
  * @file vector3d.hpp
  * @brief Minimal 3D vector value type for coordinate geometry.
  *
- * Header-only, constexpr-friendly. Mirrors the geometry used by the Python
+ * Header-only, constexpr-friendly. Matches the geometry used by the
  * reference implementation (numpy arrays of shape (3,)).
  */
 #ifndef PAIRFINDER_GEOMETRY_VECTOR3D_HPP

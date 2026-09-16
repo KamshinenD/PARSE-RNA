@@ -5,7 +5,7 @@
  * generate_modern_json fits each residue's observed ring atoms onto the ring
  * atoms of that base's standard template (Atomic_<X>.pdb), whose coordinates
  * live in the standard reference frame. Purine (A,G,I) and pyrimidine (C,U,T)
- * rings — and even A vs G — have distinct standard geometries, so the template
+ * rings - and even A vs G - have distinct standard geometries, so the template
  * is selected per base. The fit's (R, t, rms) is the residue's base frame.
  */
 #include <pairfinder/algorithms/base_frame_calculator.hpp>

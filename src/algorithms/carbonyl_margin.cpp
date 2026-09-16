@@ -1,6 +1,6 @@
 /**
  * @file carbonyl_margin.cpp
- * @brief Pyrimidine-O2 Watson/Sugar correction (port of carbonyl_margin.py).
+ * @brief Pyrimidine-O2 Watson/Sugar correction.
  */
 #include <pairfinder/algorithms/carbonyl_margin.hpp>
 
